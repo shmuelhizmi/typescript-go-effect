@@ -33,7 +33,7 @@ all. Phase 4 upgrades to checker-resolved tags.
 | Extensions | `internal/tspath/extension.go` (consts at top, supported lists) | add `ExtensionEts = ".ets"`, `ExtensionEtsx = ".etsx"`, extend supported-extension lists |
 | ScriptKind | `internal/core/scriptkind.go`, `internal/core/core.go` (`GetScriptKindFromFileName`, ~line 527) | add `ScriptKindETS`, `ScriptKindETSX` + extension mapping |
 | LanguageVariant | `internal/core/languagevariant.go` | make variant a flag-style value or add `LanguageVariantEffect`, `LanguageVariantEffectJSX` (JSX scanning rules must stay active for `.etsx`) |
-| Options | `internal/core/compileroptions.go` (JSX options ~lines 54–57, `JsxEmit` ~line 530) | add `Effect EffectEmit` (`none`/`preserve`/`transform`), `EffectImportSource string`, `GetEffectTransformEnabled()`; register in `internal/tsoptions` declarations |
+| Options | `internal/core/compileroptions.go` (JSX options ~lines 54–57, `JsxEmit` ~line 530) | add `Effect EffectEmit` (`preserve`/`transform`), `EffectImportSource string`, `GetEffectTransformEnabled()`; register in `internal/tsoptions` declarations |
 | Tokens | `internal/ast/kind_generated.go` via `_scripts/ast.json` + `_scripts/generate-go-ast.ts` | add `KindBindArrowToken` (`<-`), `KindPipeForwardToken` (`\|>`), contextual keyword kinds where needed |
 | Scanner | `internal/scanner/scanner.go` (variant handling ~line 415/761; precedent: `>>` re-scan) | scan `\|>` as one token under Effect variant; provide `ReScanBindArrow()` for parser-driven `<-` tokenization |
 | AST nodes | `_scripts/ast.json` → regenerate (`node --experimental-strip-types _scripts/generate-go-ast.ts`) | new kinds: `EffectDeclaration`, `EffectExpression`, `EffectBlock`, `BindStatement`, `BindExpression`, `RaiseStatement/Expression`, `ServiceDeclaration`, `LayerDeclaration`, `CatchExpression/CatchArm`, `MatchExpression/MatchArm/MatchPattern`, `ParExpression`, `RaceExpression`, `ForkExpression`, `JoinExpression`, `DeferStatement`, `UsingBindStatement`, `PipeExpression`, `EffectTypeSugar` |
@@ -110,5 +110,6 @@ Streams comprehensions, `atomic {}` STM blocks, runner sugar.
 ## Versioning
 
 The language version is pinned to the spec draft (`EffectScript 0.x`); each phase
-lands behind the `effect` compiler option defaulting to `"none"` until Phase 4 is
-complete, then flips to `"transform"` for the new extensions.
+lands gated on the new file extensions; the `effect` option defaults to
+`"transform"` (the syntax only exists in `.ets`/`.etsx`, so plain projects are
+unaffected), with `"preserve"` as the downstream-tooling escape hatch.

@@ -27,6 +27,8 @@ type CompilerOptions struct {
 	CheckJs                                   Tristate                                  `json:"checkJs,omitzero"`
 	CustomConditions                          []string                                  `json:"customConditions,omitzero"`
 	Composite                                 Tristate                                  `json:"composite,omitzero"`
+	Effect                                    EffectEmit                                `json:"effect,omitzero"`
+	EffectImportSource                        string                                    `json:"effectImportSource,omitzero"`
 	EmitDeclarationOnly                       Tristate                                  `json:"emitDeclarationOnly,omitzero"`
 	EmitBOM                                   Tristate                                  `json:"emitBOM,omitzero"`
 	EmitDecoratorMetadata                     Tristate                                  `json:"emitDecoratorMetadata,omitzero"`
@@ -534,6 +536,45 @@ const (
 	JsxEmitReactJSX    JsxEmit = 4
 	JsxEmitReactJSXDev JsxEmit = 5
 )
+
+// EffectEmit controls EffectScript (.ets/.etsx) lowering, mirroring JsxEmit.
+type EffectEmit int32
+
+const (
+	// EffectEmitNone is the unset zero value; EffectScript files default to
+	// EffectEmitTransform until the feature is stabilized behind the option.
+	EffectEmitNone      EffectEmit = 0
+	EffectEmitPreserve  EffectEmit = 1
+	EffectEmitTransform EffectEmit = 2
+)
+
+func (e EffectEmit) String() string {
+	switch e {
+	case EffectEmitNone:
+		return "none"
+	case EffectEmitPreserve:
+		return "preserve"
+	case EffectEmitTransform:
+		return "transform"
+	default:
+		panic("unhandled case in EffectEmit.String")
+	}
+}
+
+// GetEffectTransformEnabled reports whether EffectScript constructs should be
+// desugared into effect library calls during emit.
+func (options *CompilerOptions) GetEffectTransformEnabled() bool {
+	return options.Effect == EffectEmitTransform || options.Effect == EffectEmitNone
+}
+
+// GetEffectImportSource returns the module specifier for auto-imported helper
+// namespaces (Effect, Layer, ...), defaulting to "effect".
+func (options *CompilerOptions) GetEffectImportSource() string {
+	if options.EffectImportSource != "" {
+		return options.EffectImportSource
+	}
+	return "effect"
+}
 
 func (j JsxEmit) String() string {
 	switch j {

@@ -298,6 +298,10 @@ func parseCompilerOptions(key string, value any, allOptions *core.CompilerOption
 		allOptions.InlineSources = ParseTristate(value)
 	case "isolatedDeclarations":
 		allOptions.IsolatedDeclarations = ParseTristate(value)
+	case "effect":
+		allOptions.Effect = floatOrInt32ToFlag[core.EffectEmit](value)
+	case "effectImportSource":
+		allOptions.EffectImportSource = ParseString(value)
 	case "jsx":
 		allOptions.Jsx = floatOrInt32ToFlag[core.JsxEmit](value)
 	case "jsxFactory":

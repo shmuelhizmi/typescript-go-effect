@@ -199,6 +199,11 @@ var jsxOptionMap = collections.NewOrderedMapFromList([]collections.MapEntry[stri
 	{Key: "react", Value: core.JsxEmitReact},
 })
 
+var effectOptionMap = collections.NewOrderedMapFromList([]collections.MapEntry[string, any]{
+	{Key: "preserve", Value: core.EffectEmitPreserve},
+	{Key: "transform", Value: core.EffectEmitTransform},
+})
+
 var newLineOptionMap = collections.NewOrderedMapFromList([]collections.MapEntry[string, any]{
 	{Key: "crlf", Value: core.NewLineKindCRLF},
 	{Key: "lf", Value: core.NewLineKindLF},

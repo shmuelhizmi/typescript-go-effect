@@ -10,10 +10,12 @@ import (
 
 func getLanguageVariant(scriptKind core.ScriptKind) core.LanguageVariant {
 	switch scriptKind {
-	case core.ScriptKindTSX, core.ScriptKindJSX, core.ScriptKindJS, core.ScriptKindJSON:
-		// .tsx and .jsx files are treated as jsx language variant.
+	case core.ScriptKindTSX, core.ScriptKindJSX, core.ScriptKindJS, core.ScriptKindJSON, core.ScriptKindETSX:
+		// .tsx, .jsx and .etsx files are treated as jsx language variant.
 		return core.LanguageVariantJSX
 	}
+	// EffectScript (.ets/.etsx) syntax is gated on ScriptKind directly rather
+	// than on LanguageVariant, so .ets scans as the standard variant.
 	return core.LanguageVariantStandard
 }
 

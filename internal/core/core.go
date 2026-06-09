@@ -536,6 +536,10 @@ func GetScriptKindFromFileName(fileName string) ScriptKind {
 			return ScriptKindTS
 		case tspath.ExtensionTsx:
 			return ScriptKindTSX
+		case tspath.ExtensionEts:
+			return ScriptKindETS
+		case tspath.ExtensionEtsx:
+			return ScriptKindETSX
 		case tspath.ExtensionJson:
 			return ScriptKindJSON
 		}

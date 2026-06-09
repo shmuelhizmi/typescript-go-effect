@@ -16,11 +16,13 @@ func _() {
 	_ = x[ScriptKindExternal-5]
 	_ = x[ScriptKindJSON-6]
 	_ = x[ScriptKindDeferred-7]
+	_ = x[ScriptKindETS-8]
+	_ = x[ScriptKindETSX-9]
 }
 
-const _ScriptKind_name = "ScriptKindUnknownScriptKindJSScriptKindJSXScriptKindTSScriptKindTSXScriptKindExternalScriptKindJSONScriptKindDeferred"
+const _ScriptKind_name = "ScriptKindUnknownScriptKindJSScriptKindJSXScriptKindTSScriptKindTSXScriptKindExternalScriptKindJSONScriptKindDeferredScriptKindETSScriptKindETSX"
 
-var _ScriptKind_index = [...]uint8{0, 17, 29, 42, 54, 67, 85, 99, 117}
+var _ScriptKind_index = [...]uint8{0, 17, 29, 42, 54, 67, 85, 99, 117, 130, 144}
 
 func (i ScriptKind) String() string {
 	idx := int(i) - 0

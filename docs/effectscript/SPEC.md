@@ -28,12 +28,11 @@ delta. Anything not mentioned here behaves exactly as in TypeScript.
 
 | Option | Values | Default | Mirrors |
 | --- | --- | --- | --- |
-| `effect` | `"transform"` \| `"preserve"` \| `"none"` | `"transform"` | `jsx` |
+| `effect` | `"transform"` \| `"preserve"` | `"transform"` | `jsx` |
 | `effectImportSource` | module specifier | `"effect"` | `jsxImportSource` |
 
 `"transform"` desugars to library calls and auto-imports from `effectImportSource`.
 `"preserve"` keeps EffectScript syntax in the output (for downstream tooling).
-`"none"` makes EffectScript syntax an error (the extensions parse as plain TS).
 
 ### 1.2 Auto-import
 

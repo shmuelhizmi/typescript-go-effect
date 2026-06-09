@@ -18,4 +18,8 @@ const (
 	 * Deferred extensions are going to be included in all project contexts.
 	 */
 	ScriptKindDeferred
+	// EffectScript: TypeScript superset with first-class syntax for the Effect
+	// library (.ets), optionally combined with JSX (.etsx).
+	ScriptKindETS
+	ScriptKindETSX
 )

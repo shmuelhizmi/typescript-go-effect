@@ -382,6 +382,23 @@ var optionsForCompiler = []*CommandLineOption{
 		DefaultValueDescription:    false,
 	},
 	{
+		Name:                       "effect",
+		Kind:                       CommandLineOptionTypeEnum, // effectOptionMap,
+		AffectsSourceFile:          true,
+		AffectsEmit:                true,
+		AffectsBuildInfo:           true,
+		AffectsSemanticDiagnostics: true,
+		Category:                   diagnostics.Language_and_Environment,
+		DefaultValueDescription:    core.TSUnknown,
+	},
+	{
+		Name:             "effectImportSource",
+		Kind:             CommandLineOptionTypeString,
+		AffectsEmit:      true,
+		AffectsBuildInfo: true,
+		Category:         diagnostics.Language_and_Environment,
+	},
+	{
 		Name:                    "jsx",
 		Kind:                    CommandLineOptionTypeEnum, // jsxOptionMap,
 		AffectsSourceFile:       true,
