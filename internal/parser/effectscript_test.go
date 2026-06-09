@@ -271,3 +271,35 @@ effect handle(err: unknown) {
 `)
 	assert.Equal(t, len(file.Diagnostics()), 0)
 }
+
+func TestEffectScriptTypeSugar(t *testing.T) {
+	t.Parallel()
+	file := parseETS(t, `
+type Full = number raises Boom requires Db;
+type NoReq = string raises Boom;
+type NoErr = string requires Db;
+effect annotated(n: number): number raises Boom requires Db {
+  return n
+}
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0)
+	alias := file.Statements.Nodes[1].AsTypeAliasDeclaration() // after injected import
+	ref := alias.Type
+	assert.Equal(t, ref.Kind, ast.KindTypeReference)
+	assert.Equal(t, len(ref.AsTypeReferenceNode().TypeArguments.Nodes), 3)
+}
+
+func TestEffectScriptUsingBindAndAnonEffect(t *testing.T) {
+	t.Parallel()
+	file := parseETS(t, `
+const anon = effect (n: number) {
+  return n * 2
+};
+effect resources(cfg: string) {
+  using conn <- acquire(cfg) release (c, exit) { <- c.close() }
+  using plain <- acquire(cfg)
+  return conn
+}
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0)
+}

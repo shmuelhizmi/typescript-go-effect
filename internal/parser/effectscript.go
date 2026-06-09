@@ -681,6 +681,9 @@ func (p *Parser) tryParseEffectScriptExpression() *ast.Expression {
 		if !p.lookAhead((*Parser).nextTokenHasPrecedingLineBreak) && p.lookAhead((*Parser).nextTokenIsOpenBrace) {
 			return p.parseEffectBlockExpression()
 		}
+		if p.lookAhead((*Parser).nextIsEffectFunctionExpression) {
+			return p.parseEffectFunctionExpression()
+		}
 	case "raise":
 		if p.inEffectBody && p.lookAhead((*Parser).nextIsRaiseOperandStart) {
 			return p.parseRaiseExpression()
@@ -1241,6 +1244,140 @@ func (p *Parser) nextIsMatchExpressionStart() bool {
 			depth--
 			if depth == 0 {
 				return p.nextToken() == ast.KindOpenBraceToken
+			}
+		case ast.KindEndOfFile:
+			return false
+		}
+		p.nextToken()
+	}
+}
+
+// ---- Cycle 8: type sugar, using-binds, anonymous effect expressions ----
+
+// A raises E requires R  ==>  Effect.Effect<A, E, R>   (omitted clauses: never)
+// Called at the tail of parseType; recursion is prevented while parsing the
+// E/R operands via inEffectTypeSugar.
+func (p *Parser) tryParseEffectTypeSugar(typeNode *ast.TypeNode) *ast.TypeNode {
+	if p.inEffectTypeSugar || p.hasPrecedingLineBreak() || p.token != ast.KindIdentifier {
+		return typeNode
+	}
+	word := p.scanner.TokenValue()
+	if word != "raises" && word != "requires" {
+		return typeNode
+	}
+	pos := typeNode.Pos()
+	saveSugar := p.inEffectTypeSugar
+	p.inEffectTypeSugar = true
+	var errType, reqType *ast.TypeNode
+	if word == "raises" {
+		p.nextToken()
+		errType = p.parseType()
+		if p.token == ast.KindIdentifier && p.scanner.TokenValue() == "requires" && !p.hasPrecedingLineBreak() {
+			p.nextToken()
+			reqType = p.parseType()
+		}
+	} else {
+		p.nextToken()
+		reqType = p.parseType()
+	}
+	p.inEffectTypeSugar = saveSugar
+	end := p.nodePos()
+
+	if errType == nil {
+		errType = p.finishSynthesized(p.factory.NewKeywordTypeNode(ast.KindNeverKeyword))
+	}
+	if reqType == nil {
+		reqType = p.finishSynthesized(p.factory.NewKeywordTypeNode(ast.KindNeverKeyword))
+	}
+	p.useEffectHelper("Effect")
+	left := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier("Effect")))
+	right := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier("Effect")))
+	qualified := p.finishSynthesized(p.factory.NewQualifiedName(left, right))
+	typeArgs := p.newNodeList(core.NewTextRange(-1, -1), []*ast.Node{typeNode, errType, reqType})
+	return p.finishNodeWithEnd(p.factory.NewTypeReferenceNode(qualified, typeArgs), pos, end)
+}
+
+// using x <- acq [release (params) { body }]
+//
+//	==>  const x = yield* Effect.acquireRelease(acq, (params) => Effect.gen(...));
+//	==>  const x = yield* acq;                       // without release clause
+func (p *Parser) parseUsingBindStatement() *ast.Statement {
+	pos := p.nodePos()
+	p.nextToken() // consume 'using'
+	name := p.parseIdentifier()
+	p.consumeBindArrow()
+	acquire := p.parseAssignmentExpressionOrHigher()
+
+	var operand *ast.Expression
+	if p.token == ast.KindIdentifier && p.scanner.TokenValue() == "release" && !p.hasPrecedingLineBreak() {
+		p.nextToken() // consume 'release'
+		p.parseExpected(ast.KindOpenParenToken)
+		var params []*ast.Node
+		for p.token != ast.KindCloseParenToken && p.token != ast.KindEndOfFile {
+			paramName := p.parseIdentifier()
+			params = append(params, p.finishSynthesized(p.factory.NewParameterDeclaration(nil, nil, paramName, nil, nil, nil)))
+			if p.token == ast.KindCommaToken {
+				p.nextToken()
+			}
+		}
+		p.parseExpected(ast.KindCloseParenToken)
+		body := p.parseEffectFunctionBlock()
+		end := p.nodePos()
+
+		emptyParams := p.newNodeList(core.NewTextRange(-1, -1), nil)
+		gen := p.makeEffectCall("gen", []*ast.Node{p.makeGeneratorExpression(emptyParams, body, pos, end)}, pos, end)
+		arrowToken := p.finishSynthesized(p.factory.NewToken(ast.KindEqualsGreaterThanToken))
+		releaseFn := p.finishNodeWithEnd(p.factory.NewArrowFunction(nil, nil, p.newNodeList(core.NewTextRange(-1, -1), params), nil, nil, arrowToken, gen), pos, end)
+		operand = p.makeEffectCall("acquireRelease", []*ast.Node{acquire, releaseFn}, pos, end)
+	} else {
+		operand = acquire
+	}
+	p.parseSemicolon()
+	end := p.nodePos()
+
+	yieldExpr := p.makeYieldStar(operand, pos, end)
+	decl := p.finishNodeWithEnd(p.factory.NewVariableDeclaration(name, nil, nil, yieldExpr), pos, end)
+	declList := p.finishNodeWithEnd(p.factory.NewVariableDeclarationList(p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{decl}), ast.NodeFlagsConst), pos, end)
+	return p.finishNodeWithEnd(p.factory.NewVariableStatement(nil, declList), pos, end)
+}
+
+func (p *Parser) nextIsUsingBind() bool {
+	p.nextToken()
+	if p.token != ast.KindIdentifier || p.hasPrecedingLineBreak() {
+		return false
+	}
+	p.nextToken()
+	return p.isAtBindArrow()
+}
+
+// effect (params) [: T] { body }   ==>   Effect.fn(function* (params) { body })
+func (p *Parser) parseEffectFunctionExpression() *ast.Expression {
+	pos := p.nodePos()
+	p.nextToken() // consume 'effect'
+	parameters := p.parseParameters(ParseFlagsYield)
+	p.parseReturnType(ast.KindColonToken, false /*isType*/)
+	body := p.parseEffectFunctionBlock()
+	end := p.nodePos()
+	funcExpr := p.makeGeneratorExpression(parameters, body, pos, end)
+	return p.makeEffectCall("fn", []*ast.Node{funcExpr}, pos, end)
+}
+
+// nextIsEffectFunctionExpression: 'effect ( ... ) {' or 'effect ( ... ) :'
+func (p *Parser) nextIsEffectFunctionExpression() bool {
+	p.nextToken()
+	if p.hasPrecedingLineBreak() || p.token != ast.KindOpenParenToken {
+		return false
+	}
+	depth := 0
+	for {
+		switch p.token {
+		case ast.KindOpenParenToken:
+			depth++
+		case ast.KindCloseParenToken:
+			depth--
+			if depth == 0 {
+				next := p.nextToken()
+				return next == ast.KindOpenBraceToken || next == ast.KindColonToken
 			}
 		case ast.KindEndOfFile:
 			return false

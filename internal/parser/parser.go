@@ -83,6 +83,7 @@ type Parser struct {
 	hasParseError               bool
 	inEffectBody                bool
 	inMatchArmGuard             bool
+	inEffectTypeSugar           bool
 	effectHelpersUsed           map[string]struct{}
 
 	identifiers                map[string]string
@@ -1079,6 +1080,9 @@ func (p *Parser) parseStatement() *ast.Statement {
 			return p.parseVariableStatement(p.nodePos(), p.jsdocScannerInfo(), nil /*modifiers*/)
 		}
 	case ast.KindUsingKeyword:
+		if p.isEffectScript() && p.inEffectBody && p.lookAhead((*Parser).nextIsUsingBind) {
+			return p.parseUsingBindStatement()
+		}
 		if p.isUsingDeclaration() {
 			return p.parseVariableStatement(p.nodePos(), p.jsdocScannerInfo(), nil /*modifiers*/)
 		}
@@ -2640,6 +2644,9 @@ func (p *Parser) parseType() *ast.TypeNode {
 			p.finishNode(conditionalType, pos)
 			typeNode = conditionalType
 		}
+	}
+	if p.isEffectScript() {
+		typeNode = p.tryParseEffectTypeSugar(typeNode)
 	}
 	p.contextFlags = saveContextFlags
 	return typeNode
