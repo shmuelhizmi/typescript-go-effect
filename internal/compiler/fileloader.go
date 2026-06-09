@@ -518,7 +518,7 @@ func (p *fileLoader) resolveImportsAndModuleAugmentations(t *parseTask) {
 		}
 	}
 
-	if file.ScriptKind == core.ScriptKindJSX || file.ScriptKind == core.ScriptKindTSX {
+	if file.ScriptKind == core.ScriptKindJSX || file.ScriptKind == core.ScriptKindTSX || file.ScriptKind == core.ScriptKindETSX {
 		jsxImport := ast.GetJSXRuntimeImport(ast.GetJSXImplicitImportBase(optionsForFile, file), optionsForFile)
 		if jsxImport != "" {
 			specifier := p.createSyntheticImport(jsxImport, file)

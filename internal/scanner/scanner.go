@@ -2547,6 +2547,11 @@ func findOriginatingJSDocSatisfiesTag(sourceFile *ast.SourceFile, node *ast.Node
 }
 
 func GetErrorRangeForNode(sourceFile *ast.SourceFile, node *ast.Node) core.TextRange {
+	// Synthesized nodes (e.g. EffectScript lowering helpers) have no source
+	// positions; re-home the error to the nearest enclosing node that does.
+	for ast.NodeIsSynthesized(node) && node.Parent != nil {
+		node = node.Parent
+	}
 	errorNode := node
 	switch node.Kind {
 	case ast.KindSourceFile:

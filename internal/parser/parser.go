@@ -82,7 +82,7 @@ type Parser struct {
 	hasDeprecatedTag            bool
 	hasParseError               bool
 	inEffectBody                bool
-	effectHelperUsed            bool
+	effectHelpersUsed           map[string]struct{}
 
 	identifiers                map[string]string
 	identifierCount            int
@@ -1176,6 +1176,12 @@ func (p *Parser) parseDeclarationWorker(pos int, jsdoc jsdocScannerInfo, modifie
 		return p.parseModuleDeclaration(pos, jsdoc, modifiers)
 	case ast.KindImportKeyword:
 		return p.parseImportDeclarationOrImportEqualsDeclaration(pos, jsdoc, modifiers)
+	case ast.KindIdentifier:
+		if p.isEffectScript() {
+			if statement := p.tryParseEffectScriptDeclaration(pos, modifiers); statement != nil {
+				return statement
+			}
+		}
 	case ast.KindExportKeyword:
 		p.nextToken()
 		switch p.token {
@@ -4596,10 +4602,28 @@ func (p *Parser) parseBinaryExpressionRest(precedence ast.OperatorPrecedence, le
 		// We either have a binary operator here, or we're finished.  We call
 		// reScanGreaterToken so that we merge token sequences like > and = into >=
 		p.reScanGreaterThanToken()
+		if p.isAtPostfixCatch() {
+			// e catch { Tag >> ... }  ==>  e.pipe(Effect.catchTag(...), ...)
+			leftOperand = p.parseCatchArmsPostfix(leftOperand, pos)
+			continue
+		}
 		if p.inEffectBody && p.isAtBindArrow() {
 			// '<-' is the EffectScript BindArrow, not a relational operator;
 			// write 'a < -b' (with whitespace) for less-than-negation.
 			break
+		}
+		if p.isAtPipeOperator() {
+			// a |> f  ==>  f(a); left-associative, just below '??'.
+			pipePrecedence := ast.GetBinaryOperatorPrecedence(ast.KindQuestionQuestionToken)
+			if pipePrecedence < precedence {
+				break
+			}
+			p.nextToken() // '|'
+			p.nextToken() // '>'
+			rhs := p.parseBinaryExpressionOrHigher(pipePrecedence + 1)
+			end := p.nodePos()
+			leftOperand = p.finishNodeWithEnd(p.factory.NewCallExpression(rhs, nil, nil, p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{leftOperand}), ast.NodeFlagsNone), pos, end)
+			continue
 		}
 		newPrecedence := ast.GetBinaryOperatorPrecedence(p.token)
 		// Check the precedence to see if we should "take" this operator
@@ -5598,9 +5622,10 @@ func (p *Parser) parsePrimaryExpression() *ast.Expression {
 	case ast.KindPrivateIdentifier:
 		return p.parsePrivateIdentifier()
 	}
-	if p.isEffectScript() && p.token == ast.KindIdentifier && p.scanner.TokenValue() == "effect" &&
-		!p.lookAhead((*Parser).nextTokenHasPrecedingLineBreak) && p.lookAhead((*Parser).nextTokenIsOpenBrace) {
-		return p.parseEffectBlockExpression()
+	if p.isEffectScript() {
+		if expression := p.tryParseEffectScriptExpression(); expression != nil {
+			return expression
+		}
 	}
 	return p.parseIdentifierWithDiagnostic(diagnostics.Expression_expected, nil)
 }
@@ -6173,6 +6198,9 @@ func (p *Parser) scanStartOfDeclaration() bool {
 		case ast.KindStaticKeyword:
 			p.nextToken()
 			continue
+		}
+		if p.isEffectScript() && p.scanStartOfEffectScriptDeclaration() {
+			return true
 		}
 		return false
 	}

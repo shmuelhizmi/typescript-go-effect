@@ -4,6 +4,23 @@ How to implement the language inside this repository (typescript-go). The strate
 copies the JSX integration pattern end-to-end; concrete anchors below were verified
 against the current tree.
 
+## Status
+
+| Milestone | State |
+| --- | --- |
+| Phase 0 — spec + golden corpus | ✅ `docs/effectscript/`, `testdata/tests/cases/effectscript/` |
+| Phase 1 — file plumbing (.ets/.etsx, ScriptKinds, `effect`/`effectImportSource` options) | ✅ |
+| Phase 2 v0 — `effect` declarations, `effect {}` blocks, binds (`x <- e`, `<- e`, `(<- e)`), `raise`/`raise.die`, auto-import | ✅ parse-time lowering (`internal/parser/effectscript.go`) |
+| Phase 2 — service/layer/catch/match/par/race/fork/join/using/defer/`|>`/`raises` sugar, export modifiers | 🚧 next |
+| Phase 3+ — dedicated AST kinds + preserve mode, native checking, LSP | ⬜ |
+
+v0 lowers constructs **at parse time** into plain TS AST (the JSDoc-reparser
+pattern) instead of a separate transform pass — the binder/checker/emitter see
+standard TypeScript and the `effect` library types do the channel checking. The
+dedicated-AST architecture below remains the target for preserve mode and rich
+tooling; the parse hooks (`tryParseEffectScriptStatement` & friends) are the seam
+where it slots in.
+
 ## Architecture decision
 
 **Parse natively, desugar early, check the desugared tree.**
