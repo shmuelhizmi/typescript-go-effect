@@ -510,6 +510,14 @@ default: undefined
 
 ### Language and Environment
 
+[94m--effect[39m
+
+one of: preserve, transform
+default: undefined
+
+[94m--effectImportSource[39m
+
+
 [94m--emitDecoratorMetadata[39m
 Emit design-type metadata for decorated declarations in source files.
 type: boolean
