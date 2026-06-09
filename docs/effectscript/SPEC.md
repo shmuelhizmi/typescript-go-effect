@@ -38,7 +38,7 @@ delta. Anything not mentioned here behaves exactly as in TypeScript.
 ### 1.2 Auto-import
 
 The desugarer references the namespaces `Effect`, `Layer`, `Context`, `Scope`,
-`Fiber`, and the function `pipe`. For each one actually used by the desugared output
+`Fiber`, `Match`, and the function `pipe`. For each one actually used by the desugared output
 of a file, a namespace/named import from `effectImportSource` is synthesized unless
 the file already imports that name (in which case the user's binding is used — same
 rule as the classic-runtime JSX factory).
@@ -61,7 +61,8 @@ Precedent: the scanner already re-tokenizes `>>` vs `>`+`>` based on context.
 ### 2.2 Contextual keywords
 
 `effect`, `raise`, `service`, `layer`, `fork`, `par`, `race`, `defer`, `release`,
-`raises`, `requires`, `provide`, `scoped`, `join`.
+`raises`, `requires`, `provide`, `scoped`, `join`, `match` (and the noise words
+`value` / `tag` immediately after `match`).
 
 None become reserved words. Each is recognized only in the specific grammatical
 positions defined below (like `async`, `satisfies`, `accessor`). Look-ahead rules:
@@ -80,6 +81,10 @@ positions defined below (like `async`, `satisfies`, `accessor`). Look-ahead rule
   (§3.2). `release` only after the operand of a `using`-bind (§8). `scoped` only as
   a modifier of `layer`/`effect`. `provide` only as an infix clause of `layer`
   declarations (§7).
+* `match` is a keyword at expression position only for the exact shape
+  `match [value|tag] ( Expression ) {` — i.e. the parser commits after seeing `{`
+  following the closing paren (speculative parse otherwise falls back to a call of
+  an identifier named `match`). Member access (`s.match(...)`) is never affected.
 
 ### 2.3 ASI
 
@@ -91,8 +96,9 @@ and its operand, or between `fork` / `join` / `par` / `race` and their operands.
 ## 3. Effect declarations and effect blocks
 
 An **effect body** is the block of any construct in this section. The constructs of
-§4–§9 are legal *only* inside effect bodies; using them elsewhere is a compile error
-(error code range 18100–18199, see §12).
+§4–§6 and §8–§9 (binds, `raise`, `catch` arms, resources, concurrency) are legal
+*only* inside effect bodies; using them elsewhere is a compile error
+(error code range 18100–18199, see §13).
 
 ### 3.1 `effect` function declaration
 
@@ -175,21 +181,28 @@ is also allowed.
 The fundamental operator. Runs an effect and binds its success value;
 failures/requirements propagate to the enclosing effect's `E`/`R` channels.
 
+A bind **is itself the declaration** — no `const`/`let` prefix. `x <- e` introduces
+a fresh, immutable, block-scoped binding (exactly `const` semantics: TDZ,
+no reassignment, shadowing allowed in inner blocks).
+
 | Form | Desugaring |
 | --- | --- |
-| `const x <- e;` | `const x = yield* e;` |
-| `let x <- e;` | `let x = yield* e;` |
-| `const { a, b } <- e;` / `const [a] <- e;` | `const { a, b } = yield* e;` etc. |
-| `const x: T <- e;` | `const x: T = yield* e;` |
+| `x <- e;` | `const x = yield* e;` |
+| `{ a, b } <- e;` / `[a] <- e;` | `const { a, b } = yield* e;` etc. |
+| `x: T <- e;` | `const x: T = yield* e;` |
 | `<- e;` (discard statement) | `yield* e;` |
 | `(<- e)` (bind expression) | `(yield* e)` |
 
+* There are **no mutable binds**. For mutation, declare `let y` and assign with a
+  bind expression: `y = (<- e);`.
 * The bind expression form `(<- e)` **requires** the parentheses; this keeps the
-  grammar LL(1)-friendly and reads like Haskell's desugared `<-`:
-  `const sum = (<- getA) + (<- getB);`
-* Multiple declarators may mix forms: `const a <- ea, b = 3;` is legal.
-* Binding a `Context.Tag` class accesses a service: `const db <- Database;`
-* `var x <- e` is **not** legal (no hoisted binds).
+  grammar simple: `const sum = (<- getA) + (<- getB);`
+* Binding a `Context.Tag` class accesses a service: `db <- Database;`
+* Disambiguation inside effect bodies: a statement starting with
+  *BindingTarget* `<-` is always a bind (the parser scans ahead to the `<-` past a
+  pattern/type annotation, like arrow-function lookahead). The legacy reading
+  `x < -e` (less-than, negate) requires whitespace: `x < -e`. Statement-initial
+  `{p} <- e` is a destructuring bind, not a block (decided by the same lookahead).
 
 ## 5. Failure: `raise`
 
@@ -203,38 +216,46 @@ const x = cond ? value : raise new Boom();   // expression (never type)
 * `raise.die e;` → `Effect.die(e)` (defects). `raise` alone covers the typed error
   channel.
 
-## 6. Error handling: typed `try` / `catch`
+## 6. Error handling: postfix `catch` arms
 
-EffectScript lifts TypeScript's restriction that a catch-clause annotation must be
-`any`/`unknown`, allows **multiple catch clauses**, and gives them Effect semantics:
+Error handling attaches **directly to the effect being run**, as a postfix `catch`
+block with match-style arms (`>>`):
 
 ```ts
-try {
-  const user <- fetchUser(id)
-  return render(user)
-} catch (e: NotFound) {            // tagged-error class → Effect.catchTag
-  return renderMissing(id)
-} catch (e: DbError | NetError) {  // union of tagged errors → Effect.catchTags
-  raise new HttpError({ cause: e })
-} catch (e) {                      // bare → Effect.catchAll
-  return renderOops(e)
-} finally {                        // → Effect.ensuring
-  <- Metrics.increment("requests")
+res <- http.get(`/quote/${symbol}`) catch {
+  NotFound          >> Quote.empty
+  RateLimited as e  >> { <- Effect.sleep(e.retryAfter); raise e }
+  DbError | NetError as e >> raise new HttpError({ status: 503, cause: e })
+  _ as e            >> { <- Effect.logError(e); raise e }
 }
 ```
 
-* The `try` block and each handler block are effect bodies; each desugars to an
-  `Effect.gen` wrapped with `catchTag` / `catchTags` / `catchAll` / `ensuring`
+* `expr catch { arms }` is a postfix expression form, valid inside effect bodies on
+  any effect-typed expression. It desugars to `expr.pipe(...)` with one
+  `Effect.catchTag` / `Effect.catchTags` / `Effect.catchAll` per arm
   (normative rules in TRANSPILATION §4).
-* A catch annotation must be (a union of) class types with a string-literal `_tag`
+* Arm shape: `Tag₁ | Tag₂ … [as binding] >> handler` where `handler` is an
+  expression or a `{ ... }` effect body. An expression handler is the recovery
+  value (effectful sub-expressions like `raise` and `(<- e)` are allowed inside it).
+* `_ [as binding]` is the catch-all arm (→ `Effect.catchAll`) and must be last.
+* A tag reference must name a class type with a string-literal `_tag`
   (i.e. `Data.TaggedError` / `Schema.TaggedError` style). Anything else is error
-  18110 — use a bare `catch (e)` for the untyped case.
-* The whole `try` is an *expression-statement-like* construct whose value
-  participates in the enclosing effect: `const r = try { ... } catch (...) { ... }`
-  is permitted (try-expression), desugaring to a bound `yield*`.
-* Plain JS `try/catch` (no typed clauses, single catch) inside an effect body keeps
-  its standard meaning — it does **not** intercept Effect failures, and a warning
-  (18111) nudges toward typed catch.
+  18110 — use the `_` arm for the untyped case.
+* To guard a *region* rather than a single call, attach `catch` to an effect block:
+
+```ts
+page <- effect {
+  user <- fetchUser(id)
+  return render(user)
+} catch {
+  NotFound >> render404(id)
+}
+```
+
+* Plain JS `try/catch` inside an effect body keeps its standard meaning — it does
+  **not** intercept Effect failures; a warning (18111) points to `catch` arms.
+* Finalization is orthogonal: use `defer { ... }` (§8) or the `@ensuring(...)`
+  decorator; there is no `finally` arm.
 
 ## 7. Services and layers
 
@@ -259,14 +280,14 @@ class Database extends Context.Tag("Database")<Database, {
 * The tag string is the declared name, prefixed by the value of
   `@effectServicePrefix` (a per-file pragma comment, default empty) for uniqueness.
 * `export service X { ... }` exports the class.
-* A service is used by binding it: `const db <- Database`.
+* A service is used by binding it: `db <- Database`.
 
 ### 7.2 `layer` declaration
 
 ```ts
 layer DatabaseLive: Database {
-  const cfg  <- Config
-  const pool <- PgPool
+  cfg  <- Config
+  pool <- PgPool
   return {
     query: (sql) => pool.query(sql),
     url: cfg.dbUrl,
@@ -316,15 +337,15 @@ All forms are unary operators / expressions legal inside effect bodies.
 
 | Syntax | Desugaring | Notes |
 | --- | --- | --- |
-| `fork e` | `Effect.fork(e)` | usually bound: `const fiber <- fork e` |
-| `join f` | `Fiber.join(f)` | `const x <- join fiber` |
+| `fork e` | `Effect.fork(e)` | usually bound: `fiber <- fork e` |
+| `join f` | `Fiber.join(f)` | `x <- join fiber` |
 | `par [e1, e2, ...]` | `Effect.all([e1, e2, ...], { concurrency: "unbounded" })` | tuple result |
 | `par { a: e1, b: e2 }` | `Effect.all({ ... }, { concurrency: "unbounded" })` | struct result |
 | `par(n) [...]` / `par(n) {...}` | `{ concurrency: n }` | bounded |
 | `race [e1, e2, ...]` | `Effect.race(e1, Effect.race(e2, ...))` / `Effect.raceAll` | first winner |
 
 `par` and `race` produce effects; bind them to get values:
-`const [a, b] <- par [getA, getB]`.
+`[a, b] <- par [getA, getB]`.
 
 ## 10. Pipeline operator `|>`
 
@@ -342,7 +363,58 @@ a |> f |> g     ≡ g(f(a))
 * `a |> f(b)` always means `f(b)(a)`. To pipe into a direct call use an arrow:
   `a |> (x => f(x, b))`.
 
-## 11. JSX interoperability
+## 11. Pattern matching: `match`
+
+Rust-style match **expression**, desugaring to `effect/Match`. Two scrutinee modes:
+
+### 11.1 Value mode — `match (x)` (alias: `match value (x)`)
+
+Arms test structure/literals; capitalized identifiers are tag references,
+lowercase identifiers are bindings (Rust convention, enforced by 18150):
+
+```ts
+const label = match (res) {
+  { status: 200, body }        >> body
+  { status: 301 | 302 }        >> "redirect"
+  { status: s } if s >= 500    >> `server error ${s}`
+  [first, ...rest]             >> first
+  "timeout"                    >> "timed out"
+  NotFound as e                >> e.id          // tagged-class arm
+  _                            >> "unknown"
+}
+```
+
+* Pattern forms: literals (`200`, `"a"`, `true`, `null`), or-patterns (`a | b`),
+  object patterns (literal fields = tests, identifier fields = bindings, nested
+  patterns allowed), array patterns (with rest), tagged-class references
+  (`Tag [as x]`), bindings (lowercase identifier, must be last arm or guarded),
+  wildcard `_ [as x]`.
+* Guards: `pattern if expr >>` — guard sees the pattern's bindings.
+* Without a `_`/binding arm the match must be **exhaustive** (desugars to
+  `Match.exhaustive`; non-exhaustiveness is a type error). With one, it desugars to
+  `Match.orElse`.
+
+### 11.2 Tag mode — `match tag (x)`
+
+Every arm is a tag of the scrutinee's discriminated union (`_tag`); exhaustiveness
+is over the union's tags:
+
+```ts
+const msg = match tag (error) {
+  NotFound as e   >> `missing ${e.id}`
+  DbError | NetError >> "infra down"
+  _               >> "unexpected"
+}
+```
+
+### 11.3 Effectful matches
+
+Outside effect bodies a `match` is a pure expression (arms may not use `<-`,
+`raise`, etc.). Inside an effect body, arms are effect bodies — expression arms may
+contain `raise`/`(<- e)` and block arms (`>> { ... }`) are full effect bodies; the
+whole match participates in the enclosing effect (TRANSPILATION §10).
+
+## 12. JSX interoperability
 
 `.etsx` files combine both extension sets. JSX parsing is unchanged. Effect blocks
 may appear in JSX expression containers and vice versa:
@@ -351,7 +423,7 @@ may appear in JSX expression containers and vice versa:
 const Page = () => {
   const run = useRunEffect();
   return <button onClick={() => run(effect {
-    const user <- fetchUser(id)
+    user <- fetchUser(id)
     <- Telemetry.click("buy")
     return user
   })}>Buy</button>;
@@ -361,7 +433,7 @@ const Page = () => {
 Grammar note: a statement-initial `<-` (discard bind) is unambiguous even in `.etsx`
 because a JSX element's `<` must be followed by an identifier, `>`, or `/`.
 
-## 12. Diagnostics (new range 18100–18199)
+## 13. Diagnostics (new range 18100–18199)
 
 | Code | Message (sketch) |
 | --- | --- |
@@ -369,23 +441,28 @@ because a JSX element's `<` must be followed by an identifier, `>`, or `/`.
 | 18101 | `'raise' is only allowed inside an effect body.` |
 | 18102 | `'effect' declarations require a body.` |
 | 18103 | `Operand of '<-' must be an Effect.` (surfaced from checker on the desugared `yield*`) |
-| 18110 | `Catch clause type must be a tagged error class or union of them.` |
-| 18111 | `Untyped 'try' inside an effect body does not catch Effect failures.` (warning) |
+| 18110 | `Catch arm tag must be a tagged error class (a class with a string-literal '_tag').` |
+| 18111 | `'try' inside an effect body does not catch Effect failures; attach 'catch { ... }' arms to the effect instead.` (warning) |
+| 18112 | `'break'/'continue' cannot cross an 'effect' block boundary.` |
+| 18113 | `'catch' arms can only be attached to an Effect-typed expression.` |
 | 18120 | `'par'/'race'/'fork'/'join' are only allowed inside an effect body.` |
 | 18130 | `'using ... <-' requires a Scope in context; add 'scoped' or provide one.` |
 | 18140 | `Decorator on an 'effect' declaration must be an Effect combinator.` |
+| 18150 | `Pattern identifiers must be lowercase bindings or capitalized tag references.` |
+| 18151 | `Unreachable match arm (follows a catch-all arm).` |
+| 18152 | `'match' is not exhaustive; add the missing arms or a '_' arm.` (surfaced via Match.exhaustive) |
+| 18153 | `Effectful match arms ('<-', 'raise') are only allowed inside an effect body.` |
 
-## 13. Semantics guarantee
+## 14. Semantics guarantee
 
 Every construct's meaning is **defined as** the meaning of its desugaring in
 TRANSPILATION.md against the public `effect` API. There is no independent runtime
 semantics; an EffectScript program and its transpilation are observationally
 identical by construction.
 
-## 14. Out of scope for v1 (future work)
+## 15. Out of scope for v1 (future work)
 
 * `Stream`/`Sink` comprehension syntax (`for await`-like sugar).
-* `match` expression sugar over `effect/Match`.
 * STM blocks (`atomic { ... }` → `STM.gen`).
 * Schema literal types.
 * Top-level `main` runner sugar.

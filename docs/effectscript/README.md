@@ -35,8 +35,8 @@ service Greeter {
 }
 
 effect hello(name: string): string raises HttpError requires Greeter {
-  const greeter <- Greeter                 // bind a service
-  const prefix  <- greeter.greeting        // bind an effect
+  greeter <- Greeter                 // bind a service (immutable declaration)
+  prefix  <- greeter.greeting        // bind an effect
   if (name === "") raise new HttpError({ status: 400 })
   return `${prefix}, ${name}!`
 }

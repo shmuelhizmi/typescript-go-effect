@@ -6,16 +6,16 @@ How every major area of the `effect` library is expressed in EffectScript.
 
 | Effect feature | Library API | EffectScript | Status |
 | --- | --- | --- | --- |
-| Do-notation / sequencing | `Effect.gen` + `yield*` | `effect { }` blocks, `<-` binds | ✅ syntax |
+| Do-notation / sequencing | `Effect.gen` + `yield*` | `effect { }` blocks, `x <- e` binds (no `const` needed, always immutable) | ✅ syntax |
 | Named, traced functions | `Effect.fn("name")` | `effect name() {}` declarations | ✅ syntax |
 | Anonymous effect fns | `Effect.fn` | `effect (x) {}` expressions | ✅ syntax |
 | Success value | `return` in gen | `return` | ✅ inherited |
 | Typed failures | `Effect.fail` | `raise e` | ✅ syntax |
 | Defects | `Effect.die` | `raise.die e` | ✅ syntax |
-| Catch by tag | `Effect.catchTag` | `catch (e: TaggedClass)` | ✅ syntax |
-| Catch multiple tags | `Effect.catchTags` | `catch (e: A \| B)` | ✅ syntax |
-| Catch all | `Effect.catchAll` | `catch (e)` | ✅ syntax |
-| Finalization | `Effect.ensuring` | `finally { }` | ✅ syntax |
+| Catch by tag | `Effect.catchTag` | `e catch { NotFound [as x] >> … }` | ✅ syntax |
+| Catch multiple tags | `Effect.catchTags` | `e catch { A \| B as x >> … }` | ✅ syntax |
+| Catch all | `Effect.catchAll` | `e catch { _ as x >> … }` | ✅ syntax |
+| Finalization | `Effect.ensuring` / `addFinalizer` | `defer { }` / `@ensuring(...)` | ✅ syntax |
 | Effect type | `Effect.Effect<A, E, R>` | `A raises E requires R` type sugar | ✅ syntax |
 | Services (Tag) | `Context.Tag` | `service Name { }` | ✅ syntax |
 | Service access | `yield* Tag` | `const svc <- Tag` | ✅ syntax |
@@ -43,9 +43,11 @@ How every major area of the `effect` library is expressed in EffectScript.
 | Deferred / Queue / PubSub | `Deferred.*` etc. | binds + `\|>` | ✅ idiom |
 | Running (edge) | `Effect.runPromise`, `runMain` | `main() \|> NodeRuntime.runMain` | ✅ idiom |
 | Option / Either / Data | data modules | plain TS (no sugar needed) | ✅ idiom |
+| Pattern matching (value) | `Match.value` + `when`/`whenOr` | `match (x) { pattern >> … }` | ✅ syntax |
+| Pattern matching (tags) | `Match.tag` / `Match.tags` | `match tag (x) { Tag >> … }` | ✅ syntax |
+| Match exhaustiveness | `Match.exhaustive` / `orElse` | no `_` arm → exhaustive; `_` arm → fallback | ✅ syntax |
 | Streams | `Stream.*` | binds + `\|>`; comprehensions | 🔮 future |
 | STM | `STM.gen` | `atomic { }` | 🔮 future |
-| Pattern matching | `effect/Match` | `match` expression | 🔮 future |
 | Schema | `effect/Schema` | literal type syntax | 🔮 future |
 
 **Design test applied throughout:** a feature only gets dedicated syntax when the

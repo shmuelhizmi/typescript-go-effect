@@ -19,8 +19,8 @@ is built for `.ets` files' downstream consumers, so:
 * later (Phase 4+) the checker grows *native* checks for better messages
   (e.g. 18103 "operand of `<-` must be an Effect" instead of a raw `yield*` error).
 
-Exception: the **typed-`try` tag resolution** (mapping `catch (e: NotFound)` to
-`catchTag("NotFound", …)`) needs the checker. v1 keeps it syntax-directed: the tag
+Exception: **catch/match tag resolution** (mapping a `NotFound >> …` arm to
+`catchTag("NotFound", …)` / `Match.tag("NotFound", …)`) needs the checker. v1 keeps it syntax-directed: the tag
 string is taken from the class's `Data.TaggedError("X")` / `_tag` declaration
 *syntactically* when resolvable in-file, otherwise emitted via a tiny runtime-free
 helper pattern `Effect.catchIf((e) => e instanceof C, …)`, which needs no tag at
@@ -36,12 +36,12 @@ all. Phase 4 upgrades to checker-resolved tags.
 | Options | `internal/core/compileroptions.go` (JSX options ~lines 54–57, `JsxEmit` ~line 530) | add `Effect EffectEmit` (`none`/`preserve`/`transform`), `EffectImportSource string`, `GetEffectTransformEnabled()`; register in `internal/tsoptions` declarations |
 | Tokens | `internal/ast/kind_generated.go` via `_scripts/ast.json` + `_scripts/generate-go-ast.ts` | add `KindBindArrowToken` (`<-`), `KindPipeForwardToken` (`\|>`), contextual keyword kinds where needed |
 | Scanner | `internal/scanner/scanner.go` (variant handling ~line 415/761; precedent: `>>` re-scan) | scan `\|>` as one token under Effect variant; provide `ReScanBindArrow()` for parser-driven `<-` tokenization |
-| AST nodes | `_scripts/ast.json` → regenerate (`node --experimental-strip-types _scripts/generate-go-ast.ts`) | new kinds: `EffectDeclaration`, `EffectExpression`, `EffectBlock`, `BindDeclaration`(declarator flag), `BindExpression`, `RaiseStatement/Expression`, `ServiceDeclaration`, `LayerDeclaration`, `TypedTryStatement/CatchClause`, `ParExpression`, `RaceExpression`, `ForkExpression`, `JoinExpression`, `DeferStatement`, `UsingBindStatement`, `PipeExpression`, `EffectTypeSugar` |
+| AST nodes | `_scripts/ast.json` → regenerate (`node --experimental-strip-types _scripts/generate-go-ast.ts`) | new kinds: `EffectDeclaration`, `EffectExpression`, `EffectBlock`, `BindStatement`, `BindExpression`, `RaiseStatement/Expression`, `ServiceDeclaration`, `LayerDeclaration`, `CatchExpression/CatchArm`, `MatchExpression/MatchArm/MatchPattern`, `ParExpression`, `RaceExpression`, `ForkExpression`, `JoinExpression`, `DeferStatement`, `UsingBindStatement`, `PipeExpression`, `EffectTypeSugar` |
 | Parser | `internal/parser/parser.go` (JSX functions 4723–5033 as template), `internal/parser/utilities.go` (`getLanguageVariant`, line 11) | statement/expression hooks gated on variant + context flag `InEffectBody`; map new ScriptKinds to variant |
 | Binder | `internal/binder` | bind `effect`/`service`/`layer` declarations as value (+type for service) symbols; container handling for effect bodies (they are generator-function-like containers) |
 | Transform | new `internal/transformers/effecttransforms/effect.go` (model: `internal/transformers/jsxtransforms/jsx.go`) | the desugarer implementing TRANSPILATION.md, incl. auto-import synthesis (model: JSX implicit import machinery in jsx.go lines 42–100) |
 | Pipeline | `internal/compiler/emitter.go` `getScriptTransformers()` (~line 103–171; JSX registration at ~152) | register Effect transformer **before** the type eraser & JSX transform so downstream transforms see plain TS |
-| Checker | `internal/checker/` (`checker.go` switch; `jsx.go` as model) | Phase 1: only grammar-context errors (1810x). Phase 4: native checks for binds/raise/catch tags |
+| Checker | `internal/checker/` (`checker.go` switch; `jsx.go` as model) | Phase 1: only grammar-context errors (1810x). Phase 4: native checks for binds/raise/catch arms/match patterns |
 | Printer | `internal/printer` | print new nodes (needed for `preserve` mode + LSP/formatting round-trip) |
 | LSP | `internal/ls`, `internal/lsp` | classify new keywords/tokens for semantic highlighting; completions for `raises`/`requires`; hover on desugared symbols |
 | Tests | `testdata/`, `internal/testrunner`, fourslash | golden corpus: `.ets` → emitted JS/d.ts baselines + diagnostics baselines |
@@ -67,7 +67,7 @@ example parses; every `.ts` file still parses identically (fuzz: run existing
 parser baselines).
 
 ### Phase 3 — Desugaring transform + emit
-`effecttransforms` implementing TRANSPILATION.md rules 1–9, 11, 12; registration in
+`effecttransforms` implementing TRANSPILATION.md rules 1–10, 12, 13; registration in
 the emit pipeline; source-map fidelity. Exit criteria: golden corpus JS output
 matches; examples in EXAMPLES.md compile and run against `effect` (integration test
 with the real npm package executing transpiled output under Node).
@@ -75,7 +75,7 @@ with the real npm package executing transpiled output under Node).
 ### Phase 4 — Checking
 Run checker over desugared trees with original-position re-homing (18103, 18110,
 18112, 18130, 18140); checker-resolved `_tag` strings for `catchTag`; `satisfies`
-augmentation for `raises`/`requires` annotations (TRANSPILATION §10); declaration
+augmentation for `raises`/`requires` annotations (TRANSPILATION §11); declaration
 emit for `.ets`.
 
 ### Phase 5 — Tooling
@@ -84,8 +84,8 @@ rename of services/layers), formatter support (dprint plugin config in
 `.dprint.jsonc`), `_extension/` VS Code grammar for `.ets`/`.etsx`,
 `_packages/native-preview` API surface (new ScriptKinds in the generated enums).
 
-### Phase 6 — Future syntax (spec §14)
-Streams comprehensions, `atomic {}` STM blocks, `match` sugar, runner sugar.
+### Phase 6 — Future syntax (spec §15)
+Streams comprehensions, `atomic {}` STM blocks, runner sugar.
 
 ## Risks & mitigations
 
@@ -98,9 +98,9 @@ Streams comprehensions, `atomic {}` STM blocks, `match` sugar, runner sugar.
    affected (extension-gated).
 3. **Generated-code checking produces alien errors.** Mitigated by phased plan:
    original-position re-homing first (Phase 4), then targeted native diagnostics.
-4. **`try` body in nested generator changes `break`/`continue`/`return` meaning.**
-   Spec'd explicitly (TRANSPILATION §4); error 18112 for crossing jumps; `return`
-   semantics documented as returning the try-expression value.
+4. **Arm/block bodies move into nested generators**, changing what
+   `break`/`continue`/`return` can reach. Spec'd explicitly (TRANSPILATION §4);
+   error 18112 for crossing jumps; `return` in an arm is the recovery value.
 5. **Upstream drift** (this repo tracks microsoft/typescript-go). All changes are
    additive and extension-gated; new code lives in new files/dirs where possible
    (`effecttransforms/`, `checker/effect.go`) to minimize merge conflicts.

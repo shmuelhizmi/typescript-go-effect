@@ -1,0 +1,17 @@
+// .etsx: JSX + EffectScript in one file (SPEC §12)
+
+declare const useEffectRunner: () => (e: any) => void;
+declare const purchase: (item: string) => any;
+declare namespace JSX { interface IntrinsicElements { button: any } }
+
+export function BuyButton({ item }: { item: string }) {
+  const run = useEffectRunner();
+  return (
+    <button onClick={() => run(effect {
+      receipt <- purchase(item)
+      <- Effect.log(`charged ${receipt.amount}`)
+    })}>
+      Buy now
+    </button>
+  );
+}

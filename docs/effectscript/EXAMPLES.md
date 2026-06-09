@@ -17,8 +17,8 @@ service UserRepo {
 }
 
 effect getUser(id: string): User raises NotFound | DbError requires UserRepo {
-  const repo <- UserRepo
-  const user <- repo.findById(id)
+  repo <- UserRepo
+  user <- repo.findById(id)
   if (user === undefined) raise new NotFound({ id })
   return user
 }
@@ -44,19 +44,16 @@ const getUser = Effect.fn("getUser")(function* (id: string) {
 });
 ```
 
-## 2. Typed error handling
+## 2. Postfix `catch` arms
+
+Handlers attach to the effect they guard:
 
 ```ts
 effect loadPage(id: string): string {
-  const html = try {
-    const user <- getUser(id)
-    return render(user)
-  } catch (e: NotFound) {
-    return render404(e.id)
-  } catch (e: DbError | NetError) {
-    raise new HttpError({ status: 503, cause: e })
-  } finally {
-    <- Effect.logDebug("loadPage finished")
+  html <- renderUser(id) catch {
+    NotFound as e            >> render404(e.id)
+    DbError | NetError as e  >> raise new HttpError({ status: 503, cause: e })
+    _ as e                   >> { <- Effect.logError(e); return "oops" }
   }
   return html
 }
@@ -66,34 +63,73 @@ effect loadPage(id: string): string {
 
 ```ts
 const loadPage = Effect.fn("loadPage")(function* (id: string) {
-  const html = yield* Effect.gen(function* () {
-    const user = yield* getUser(id);
-    return render(user);
-  }).pipe(
-    Effect.catchTag("NotFound", (e) => Effect.gen(function* () {
-      return render404(e.id);
-    })),
+  const html = yield* renderUser(id).pipe(
+    Effect.catchTag("NotFound", (e) => Effect.succeed(render404(e.id))),
     Effect.catchTags({
-      DbError: (e) => Effect.gen(function* () {
-        return yield* Effect.fail(new HttpError({ status: 503, cause: e }));
-      }),
-      NetError: (e) => Effect.gen(function* () {
-        return yield* Effect.fail(new HttpError({ status: 503, cause: e }));
-      }),
+      DbError: (e) => Effect.fail(new HttpError({ status: 503, cause: e })),
+      NetError: (e) => Effect.fail(new HttpError({ status: 503, cause: e })),
     }),
-    Effect.ensuring(Effect.gen(function* () {
-      yield* Effect.logDebug("loadPage finished");
+    Effect.catchAll((e) => Effect.gen(function* () {
+      yield* Effect.logError(e);
+      return "oops";
     })),
   );
   return html;
 });
 ```
 
-## 3. Layers and wiring
+To guard a multi-statement region, attach `catch` to an `effect { }` block:
+
+```ts
+page <- effect {
+  user <- fetchUser(id)
+  return render(user)
+} catch {
+  NotFound >> render404(id)
+}
+```
+
+## 3. Rust-style `match`
+
+Value mode and tag mode:
+
+```ts
+const label = match (res) {
+  { status: 200, body }      >> body
+  { status: 301 | 302 }      >> "redirect"
+  { status: s } if s >= 500  >> `server error ${s}`
+  _                          >> "unknown"
+}
+
+const msg = match tag (error) {
+  NotFound as e       >> `missing ${e.id}`
+  DbError | NetError  >> "infra down"
+  _                   >> "unexpected"
+}
+```
+
+⇣
+
+```ts
+const label = Match.value(res).pipe(
+  Match.when({ status: 200 }, ({ body }) => body),
+  Match.whenOr({ status: 301 }, { status: 302 }, () => "redirect"),
+  Match.when((v) => v.status >= 500, ({ status: s }) => `server error ${s}`),
+  Match.orElse(() => "unknown"),
+);
+
+const msg = Match.value(error).pipe(
+  Match.tag("NotFound", (e) => `missing ${e.id}`),
+  Match.tags({ DbError: () => "infra down", NetError: () => "infra down" }),
+  Match.orElse(() => "unexpected"),
+);
+```
+
+## 4. Layers and wiring
 
 ```ts
 layer UserRepoLive: UserRepo provide [PgPoolLive] {
-  const pool <- PgPool
+  pool <- PgPool
   return {
     findById: (id) => pool.queryOne(`select * from users where id = $1`, [id]),
   }
@@ -105,7 +141,7 @@ scoped layer PgPoolLive: PgPool {
 }
 
 effect main(): void requires UserRepo {
-  const user <- getUser("42")
+  user <- getUser("42")
   <- Effect.log(user.name)
 }
 
@@ -136,20 +172,20 @@ const main = Effect.fn("main")(function* () {
 pipe(main(), Effect.provide(UserRepoLive), Effect.runPromise);
 ```
 
-## 4. Concurrency
+## 5. Concurrency
 
 ```ts
 effect dashboard(userId: string): Dashboard {
-  const [user, orders, recs] <- par [
+  [user, orders, recs] <- par [
     getUser(userId),
     getOrders(userId),
     getRecommendations(userId),
   ]
 
-  const refresher <- fork pollUpdates(userId)
+  refresher <- fork pollUpdates(userId)
   defer { <- Fiber.interrupt(refresher) }
 
-  const fastest <- race [cdnFetch(user.avatar), originFetch(user.avatar)]
+  fastest <- race [cdnFetch(user.avatar), originFetch(user.avatar)]
   return { user, orders, recs, avatar: fastest }
 }
 ```
@@ -174,14 +210,16 @@ const dashboard = Effect.fn("dashboard")(function* (userId: string) {
 });
 ```
 
-## 5. Decorator combinators
+## 6. Decorator combinators
 
 ```ts
 @retry(Schedule.exponential("100 millis", 2).pipe(Schedule.upTo("5 seconds")))
 @timeout("10 seconds")
 effect fetchQuote(symbol: string): Quote raises QuoteError requires Http {
-  const http <- Http
-  const res  <- http.get(`/quote/${symbol}`)
+  http <- Http
+  res  <- http.get(`/quote/${symbol}`) catch {
+    RateLimited >> Quote.cached(symbol)
+  }
   return parseQuote((<- res.json))
 }
 ```
@@ -195,12 +233,14 @@ const fetchQuote = Effect.fn(
   Effect.retry(Schedule.exponential("100 millis", 2).pipe(Schedule.upTo("5 seconds"))),
 )(function* (symbol: string) {
   const http = yield* Http;
-  const res = yield* http.get(`/quote/${symbol}`);
+  const res = yield* http.get(`/quote/${symbol}`).pipe(
+    Effect.catchTag("RateLimited", () => Effect.succeed(Quote.cached(symbol))),
+  );
   return parseQuote((yield* res.json));
 });
 ```
 
-## 6. React interop (`.etsx`)
+## 7. React interop (`.etsx`)
 
 EffectScript relates to Effect exactly as JSX relates to React — and the two
 compose in one file:
@@ -208,8 +248,8 @@ compose in one file:
 ```tsx
 // BuyButton.etsx
 effect purchase(item: ItemId): Receipt raises PaymentError requires Payments {
-  const pay <- Payments
-  const receipt <- pay.charge(item)
+  pay     <- Payments
+  receipt <- pay.charge(item)
   <- Analytics.track("purchase", { item })
   return receipt
 }
@@ -218,7 +258,7 @@ export function BuyButton({ item }: { item: ItemId }) {
   const run = useEffectRunner();      // app-level runtime hook
   return (
     <button onClick={() => run(effect {
-      const receipt <- purchase(item)
+      receipt <- purchase(item)
       <- Effect.log(`charged ${receipt.amount}`)
     })}>
       Buy now
@@ -230,7 +270,7 @@ export function BuyButton({ item }: { item: ItemId }) {
 The JSX desugars through the standard JSX transform; the `effect` constructs
 through the EffectScript transform. Two orthogonal sugars, one file.
 
-## 7. Expression-level binds
+## 8. Expression-level binds
 
 ```ts
 effect total(cart: Cart): number requires Pricing {

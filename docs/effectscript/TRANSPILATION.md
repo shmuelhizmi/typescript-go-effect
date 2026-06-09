@@ -3,10 +3,10 @@
 Normative desugaring from EffectScript constructs into TypeScript + the `effect`
 library. Notation: `⟦x⟧` is the desugaring of `x`; `body'` is a body with all
 EffectScript statements recursively desugared. Identifiers introduced by the
-desugarer (`Effect`, `Layer`, `Context`, `Fiber`, `pipe`) refer to the auto-imported
+desugarer (`Effect`, `Layer`, `Context`, `Fiber`, `Match`, `pipe`) refer to the auto-imported
 bindings (SPEC §1.2).
 
-These rules are **the** semantics of EffectScript (SPEC §13).
+These rules are **the** semantics of EffectScript (SPEC §14).
 
 ---
 
@@ -21,7 +21,7 @@ These rules are **the** semantics of EffectScript (SPEC §13).
 
 * The string literal is the declared name (used as the tracing span name).
 * With a plain type annotation `: T`, the generated generator return type is checked
-  against `T` via a synthesized satisfies-check (see §10).
+  against `T` via a synthesized satisfies-check (see §11).
 * `export effect f ...` → `export const f = ...`;
   `export default effect f ...` → `const f = ...; export default f;`.
 
@@ -65,19 +65,16 @@ via the field initializer scope). `static effect m` becomes a static field with
 
 ## 2. Binds
 
-Inside the enclosing generator:
+Inside the enclosing generator (binds are always immutable — they emit `const`):
 
 ```
-⟦ const x <- e; ⟧        = const x = yield* ⟦e⟧;
-⟦ let x <- e; ⟧          = let x = yield* ⟦e⟧;
-⟦ const {p} <- e; ⟧      = const {p} = yield* ⟦e⟧;
-⟦ const x: T <- e; ⟧     = const x: T = yield* ⟦e⟧;
+⟦ x <- e; ⟧              = const x = yield* ⟦e⟧;
+⟦ {p} <- e; ⟧            = const {p} = yield* ⟦e⟧;
+⟦ [p] <- e; ⟧            = const [p] = yield* ⟦e⟧;
+⟦ x: T <- e; ⟧           = const x: T = yield* ⟦e⟧;
 ⟦ <- e; ⟧                = yield* ⟦e⟧;
 ⟦ (<- e) ⟧               = (yield* ⟦e⟧)
 ```
-
-Mixed declarator lists keep order: `const a <- ea, b = 1;` →
-`const a = yield* ea, b = 1;`.
 
 ## 3. `raise`
 
@@ -91,39 +88,47 @@ Mixed declarator lists keep order: `const a <- ea, b = 1;` →
 (The `return` in statement position is unreachable — `Effect.fail` never resumes —
 but keeps TS control-flow analysis exact, e.g. for definite assignment.)
 
-## 4. Typed `try`
+## 4. Postfix `catch` arms
 
-Let `T = try { b } catch (e1: C1) { h1 } … catch (en: Cn ∪ …) { hn } [catch (e) { hAll }] [finally { f }]`.
-
-```
-⟦T⟧(statement) = yield* P;
-⟦T⟧(expression) = (yield* P)
-const r = ⟦T⟧ …  = const r = yield* P;
-```
-
-where `P` is built by piping:
+Let `K = expr catch { A1 … An }` where arm `Ai` is
+`Ci_1 | … | Ci_k [as ei] >> bi` and the optional final arm is `_ [as e] >> bAll`.
 
 ```
-P = Effect.gen(function* () { b' }).pipe(
-      Effect.catchTag("Tag(C1)", (e1) => Effect.gen(function* () { h1' })),
-      ...,
-      Effect.catchTags({ "Tag(Cn_a)": handler_n, "Tag(Cn_b)": handler_n }), // unions share one handler fn
-      Effect.catchAll((e) => Effect.gen(function* () { hAll' })),           // if present
-      Effect.ensuring(Effect.gen(function* () { f' })),                     // if present
-    )
+⟦K⟧ = ⟦expr⟧.pipe(
+        H(A1),
+        ...,
+        Effect.catchAll((e) => B(bAll)),          // if a '_' arm is present
+      )
 ```
+
+per-arm handler `H`:
+
+```
+H( C as e >> b )            = Effect.catchTag("Tag(C)", (e) => B(b))
+H( C1 | C2 as e >> b )      = Effect.catchTags({ "Tag(C1)": h, "Tag(C2)": h })
+                              where h = (e) => B(b)     // one shared function
+```
+
+arm-body lowering `B`:
+
+```
+B( expression b )  = Effect.gen(function* () { return ⟦b⟧'; })
+B( { body } )      = Effect.gen(function* () { body' })
+```
+
+(The emitter MAY simplify `B(b)` to `Effect.succeed(b)` / `Effect.fail(x)` when the
+arm body is statically effect-free — e.g. a pure expression or a lone `raise`.
+Both outputs are normative-equivalent.)
 
 * `Tag(C)` is the string-literal type of `C.prototype._tag` resolved by the checker
   (for `Data.TaggedError("X")` classes this is `"X"`). If it cannot be resolved to a
   string literal → error 18110.
-* For a union annotation `catch (e: A | B)`, one handler function is generated and
-  referenced for each tag in a single `Effect.catchTags` call.
-* `return` inside `b`/handlers returns from `P` (the inner gen), making `T`'s value
-  that return — *not* from the enclosing effect. To exit the enclosing effect from
-  inside a `try`, bind the result and return it.
-* Control-flow statements that cross the `try` boundary (`break`/`continue` to an
-  outer loop) are **errors** (18112) in v1, since the body moves into a nested
-  generator. (`yield*` of binds still works — nested gens compose.)
+* An omitted `as` binding desugars with a fresh unused parameter name.
+* `K` is an expression of Effect type; it composes with binds:
+  `x <- e catch { … }` → `const x = yield* ⟦K⟧;`.
+* `return` inside a `{ body }` arm returns from that arm's `Effect.gen` (it is the
+  recovery value), not from the enclosing effect.
+* `break`/`continue` referencing loops outside the arm are errors (18112).
 
 ## 5. Services
 
@@ -168,7 +173,7 @@ P = Effect.gen(function* () { b' }).pipe(
 ⟦ race [e1, …, en] ⟧ (n>2) = Effect.raceAll([⟦e1⟧, …, ⟦en⟧])
 ```
 
-These produce Effects; combine with bind: `const [a,b] <- par [ea, eb]` →
+These produce Effects; combine with bind: `[a, b] <- par [ea, eb]` →
 `const [a, b] = yield* Effect.all([ea, eb], { concurrency: "unbounded" });`.
 
 ## 9. Pipeline `|>`
@@ -185,7 +190,54 @@ When a chain has ≥ 3 stages the emitter MAY emit `pipe(a, f, g, h)` instead of
 nested calls — both are normative-equivalent; `pipe` is preferred for readability of
 output and matches hand-written Effect style.
 
-## 10. Type-annotation checking
+## 10. `match` expressions
+
+Let `M = match [value|tag] (x) { A1 … An }` with arms `Ai = Pi [if gi] >> bi`.
+
+Pure context (outside effect bodies):
+
+```
+⟦M⟧ = Match.value(⟦x⟧).pipe(
+        W(A1), ..., W(An),
+        T,
+      )
+```
+
+where the terminator `T` is `Match.exhaustive` if no catch-all/binding arm exists,
+otherwise the last arm lowers into `Match.orElse`:
+
+```
+W( _ as e >> b )                = Match.orElse((e) => ⟦b⟧)            // last arm only
+W( ident >> b )                 = Match.orElse((ident) => ⟦b⟧)        // lowercase binding
+W( Tag as e >> b )              = Match.tag("Tag(C)", (e) => ⟦b⟧)
+W( Tag1 | Tag2 as e >> b )      = Match.tags({ "Tag(C1)": h, "Tag(C2)": h })
+W( lit >> b )                   = Match.when(lit, () => ⟦b⟧)
+W( lit1 | lit2 >> b )           = Match.whenOr(lit1, lit2, () => ⟦b⟧)
+W( {f1: p1, g} >> b )           = Match.when(S({f1: p1, g}), (v) => { const {f1, g} = v; return ⟦b⟧ })
+                                  // S(…) = structural pattern: literal fields stay,
+                                  // binding fields are dropped from the test object
+W( [p, ...rest] >> b )          = Match.when((v): v is τ => Array.isArray(v) && «structural tests»,
+                                             (v) => { const [p, ...rest] = v; return ⟦b⟧ })
+W( P if g >> b )                = Match.when((v) => «test of P»(v) && ((«bindings of P») => g)(v),
+                                             (v) => { «destructure P»; return ⟦b⟧ })
+```
+
+`match tag (x)` requires every `Pi` to be a TagReference; lowering is identical
+(all arms via `Match.tag`/`Match.tags`), and exhaustiveness is over the scrutinee
+union's `_tag`s.
+
+Effectful context (inside an effect body, when any arm uses `<-`/`raise` or a
+block body): every arm body lowers through `B(...)` from §4 (arm bodies become
+`Effect.gen`s; statically pure arms MAY simplify to `Effect.succeed`), making the
+match select an *Effect*; the whole expression is then bound:
+`⟦M⟧ₑ = (yield* ⟦M with B-lowered arms⟧)`. If no arm is effectful, the pure form is
+used unchanged.
+
+* Arm order is preserved; first match wins.
+* An arm after a catch-all/binding arm → 18151.
+* Pattern identifier case rule (lowercase binding / Capitalized tag) → 18150.
+
+## 11. Type-annotation checking
 
 For `effect f(): A raises E requires R { body }` the emitted code is augmented (in
 checking only, not in JS output) with:
@@ -197,19 +249,23 @@ const f = Effect.fn("f")(function* (…) { … }) satisfies (…args: any) => Ef
 so channel mismatches surface as ordinary assignability errors pointing at the
 annotation. For plain `: T` annotations, `satisfies (…) => T`.
 
-## 11. Auto-import synthesis
+## 12. Auto-import synthesis
 
 After desugaring a file, for each referenced helper namespace not already imported:
 
 ```ts
-import { Effect } from "effect";          // and/or Layer, Context, Fiber, pipe
+import { Effect } from "effect";          // and/or Layer, Context, Fiber, Match, pipe
 ```
 
 with `"effect"` replaced by `effectImportSource`. Synthesized specifiers merge into
 one import declaration. A user import of e.g. `Effect` from anywhere suppresses
 synthesis for that name (their binding wins — same as classic JSX factory lookup).
+If a user binding that is *not* an import shadows a needed name (e.g. a local
+`const Fiber = …`), the synthesized import is aliased to a fresh name
+(`import { Fiber as Fiber_1 } from "effect"`), mirroring the react-jsx transform's
+helper-collision handling.
 
-## 12. Source maps & original positions
+## 13. Source maps & original positions
 
 Every synthesized node maps back to the originating EffectScript token range:
 `yield*` to the `<-` token, `Effect.fail` to the `raise` keyword, `Effect.fn` call
