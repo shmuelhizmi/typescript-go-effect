@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 
 	"github.com/microsoft/typescript-go/internal/tsagent/cli"
@@ -76,17 +77,40 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	result, err := cmd.Run(ctx, ws, cmdFlags, positional)
+	output := &cli.Output{W: stdout, Format: format, Limit: global.limit, Offset: global.offset}
 	if err != nil {
+		// Commands may return a result alongside an error (e.g. a threshold
+		// failure that still carries the report): print the result normally,
+		// then the error, and exit nonzero.
+		if !isNilResult(result) {
+			if writeErr := output.Write(result); writeErr != nil {
+				fmt.Fprintf(stderr, "tsagent: %v\n", writeErr)
+			}
+		}
 		fmt.Fprintf(stderr, "tsagent: %v\n", err)
 		return cli.ExitCode(err)
 	}
 
-	output := &cli.Output{W: stdout, Format: format, Limit: global.limit, Offset: global.offset}
 	if err := output.Write(result); err != nil {
 		fmt.Fprintf(stderr, "tsagent: %v\n", err)
 		return cli.ExitFailed
 	}
 	return cli.ExitOK
+}
+
+// isNilResult reports whether a handler result is nil, including a typed
+// nil pointer wrapped in a non-nil interface (the common `return result, err`
+// shape where result is a nil *T).
+func isNilResult(result any) bool {
+	if result == nil {
+		return true
+	}
+	v := reflect.ValueOf(result)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice:
+		return v.IsNil()
+	}
+	return false
 }
 
 // lookupCommand resolves `<family> <name>` or single-command families

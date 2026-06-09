@@ -73,7 +73,9 @@ func (h *lsHost) Converters() *lsconv.Converters {
 }
 
 func (h *lsHost) GetPreferences(activeFile string) lsutil.UserPreferences {
-	return lsutil.UserPreferences{}
+	// Seed default FormatCodeSettings so language-service edits are rendered
+	// with standard spacing (e.g. `import { A, B }`, not `import { A,B }`).
+	return lsutil.UserPreferences{FormatCodeSettings: lsutil.GetDefaultFormatCodeSettings()}
 }
 
 func (h *lsHost) GetECMALineInfo(fileName string) *sourcemap.ECMALineInfo {
