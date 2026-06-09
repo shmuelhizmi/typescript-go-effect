@@ -60,6 +60,13 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return cli.ExitUsage
 	}
 
+	// Commands that build their own Workspace (the serve daemon and its
+	// clients have NeedsProgram=false but still honor --project) receive the
+	// global --project value through this optional interface.
+	if pa, ok := cmdFlags.(interface{ SetProject(string) }); ok {
+		pa.SetProject(global.project)
+	}
+
 	format, err := resolveFormat(global.format)
 	if err != nil {
 		fmt.Fprintf(stderr, "tsagent: %v\n", err)
@@ -91,6 +98,11 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return cli.ExitCode(err)
 	}
 
+	// Commands with no result (e.g. the serve daemon after shutdown) emit
+	// nothing rather than a null envelope.
+	if isNilResult(result) {
+		return cli.ExitOK
+	}
 	if err := output.Write(result); err != nil {
 		fmt.Fprintf(stderr, "tsagent: %v\n", err)
 		return cli.ExitFailed
