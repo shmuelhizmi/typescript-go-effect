@@ -3,6 +3,14 @@
 **Status:** Draft specification
 **Base:** Fork of [typescript-go](https://github.com/microsoft/typescript-go) (`internal/ls`, `internal/checker`, `internal/compiler`)
 
+> **Implementation status:** the core of this spec is implemented at `cmd/tsagent` /
+> `internal/tsagent`. See the [user manual](../cmd/tsagent/README.md) for the
+> commands and flags that actually exist today (including an honest limitations
+> list of spec'd features that are not implemented yet), and the
+> [implementation plan](./agent-cli-implementation-plan.md) for the architecture.
+> Where this document and the README disagree, the README describes shipped
+> behavior; this document remains the target design.
+
 ---
 
 ## 1. Vision
