@@ -12,7 +12,6 @@ import (
 	"github.com/microsoft/typescript-go/internal/tsagent/cli"
 	_ "github.com/microsoft/typescript-go/internal/tsagent/cmds"
 	"github.com/microsoft/typescript-go/internal/tsagent/core"
-	"golang.org/x/term"
 )
 
 func main() {
@@ -22,6 +21,7 @@ func main() {
 type globalFlags struct {
 	project string
 	format  string
+	raw     bool
 	limit   int
 	offset  int
 }
@@ -29,7 +29,8 @@ type globalFlags struct {
 func registerGlobalFlags(fs *flag.FlagSet) *globalFlags {
 	g := &globalFlags{}
 	fs.StringVar(&g.project, "project", "", "tsconfig.json path or directory (default: discovered from cwd)")
-	fs.StringVar(&g.format, "format", "", "output format: json, text, or ndjson (default: text on TTY, else json)")
+	fs.StringVar(&g.format, "format", "", "output format: json, text, or ndjson (default: text)")
+	fs.BoolVar(&g.raw, "raw", false, "emit raw JSON instead of the default pretty text output")
 	fs.IntVar(&g.limit, "limit", 0, "maximum number of list items to emit (0 = unlimited)")
 	fs.IntVar(&g.offset, "offset", 0, "number of list items to skip")
 	return g
@@ -67,7 +68,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		pa.SetProject(global.project)
 	}
 
-	format, err := resolveFormat(global.format)
+	format, err := resolveFormat(global.format, global.raw)
 	if err != nil {
 		fmt.Fprintf(stderr, "tsagent: %v\n", err)
 		return cli.ExitCode(err)
@@ -165,12 +166,15 @@ func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
 	return positional, nil
 }
 
-func resolveFormat(value string) (cli.Format, error) {
-	if value == "" {
-		if term.IsTerminal(int(os.Stdout.Fd())) {
-			return cli.FormatText, nil
+func resolveFormat(value string, raw bool) (cli.Format, error) {
+	if raw {
+		if value != "" {
+			return "", cli.UsageErrorf("--raw and --format are mutually exclusive")
 		}
 		return cli.FormatJSON, nil
+	}
+	if value == "" {
+		return cli.FormatText, nil
 	}
 	return cli.ParseFormat(value)
 }
@@ -185,5 +189,5 @@ func printHelp(w io.Writer) {
 		fmt.Fprintf(w, "  %-16s %s\n", strings.TrimSpace(cmd.Family+" "+cmd.Name), cmd.Summary)
 	}
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Global flags: --project <tsconfig|dir>, --format json|text|ndjson, --limit N, --offset N")
+	fmt.Fprintln(w, "Global flags: --project <tsconfig|dir>, --raw (JSON output), --format json|text|ndjson, --limit N, --offset N")
 }
