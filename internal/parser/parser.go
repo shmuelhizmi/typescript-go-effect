@@ -81,6 +81,8 @@ type Parser struct {
 	statementHasAwaitIdentifier bool
 	hasDeprecatedTag            bool
 	hasParseError               bool
+	inEffectBody                bool
+	effectHelperUsed            bool
 
 	identifiers                map[string]string
 	identifierCount            int
@@ -442,6 +444,9 @@ func (p *Parser) parseSourceFileWorker() *ast.SourceFile {
 	if len(p.reparseList) != 0 {
 		statements = append(statements, p.reparseList...)
 		p.reparseList = nil
+	}
+	if p.isEffectScript() {
+		statements = p.injectEffectScriptImports(statements)
 	}
 	node := p.finishNode(p.factory.NewSourceFile(p.opts, p.sourceText, p.newNodeList(core.NewTextRange(pos, end), statements), eof), pos)
 	result := node.AsSourceFile()
@@ -1112,6 +1117,11 @@ func (p *Parser) parseStatement() *ast.Statement {
 		ast.KindStaticKeyword, ast.KindReadonlyKeyword, ast.KindGlobalKeyword:
 		if p.isStartOfDeclaration() {
 			return p.parseDeclaration()
+		}
+	}
+	if p.isEffectScript() {
+		if statement := p.tryParseEffectScriptStatement(); statement != nil {
+			return statement
 		}
 	}
 	return p.parseExpressionOrLabeledStatement()
@@ -3496,6 +3506,9 @@ func (p *Parser) parseFunctionBlockOrSemicolon(flags ParseFlags, diagnosticMessa
 func (p *Parser) parseFunctionBlock(flags ParseFlags, diagnosticMessage *diagnostics.Message) *ast.Node {
 	saveContextFlags := p.contextFlags
 	saveHasAwaitIdentifier := p.statementHasAwaitIdentifier
+	saveInEffectBody := p.inEffectBody
+	// EffectScript binds/raise don't reach into nested ordinary functions.
+	p.inEffectBody = false
 	p.setContextFlags(ast.NodeFlagsYieldContext, flags&ParseFlagsYield != 0)
 	p.setContextFlags(ast.NodeFlagsAwaitContext, flags&ParseFlagsAwait != 0)
 	// We may be in a [Decorator] context when parsing a function expression or
@@ -3504,6 +3517,7 @@ func (p *Parser) parseFunctionBlock(flags ParseFlags, diagnosticMessage *diagnos
 	block := p.parseBlock(flags&ParseFlagsIgnoreMissingOpenBrace != 0, diagnosticMessage)
 	p.contextFlags = saveContextFlags
 	p.statementHasAwaitIdentifier = saveHasAwaitIdentifier
+	p.inEffectBody = saveInEffectBody
 	return block
 }
 
@@ -4582,6 +4596,11 @@ func (p *Parser) parseBinaryExpressionRest(precedence ast.OperatorPrecedence, le
 		// We either have a binary operator here, or we're finished.  We call
 		// reScanGreaterToken so that we merge token sequences like > and = into >=
 		p.reScanGreaterThanToken()
+		if p.inEffectBody && p.isAtBindArrow() {
+			// '<-' is the EffectScript BindArrow, not a relational operator;
+			// write 'a < -b' (with whitespace) for less-than-negation.
+			break
+		}
 		newPrecedence := ast.GetBinaryOperatorPrecedence(p.token)
 		// Check the precedence to see if we should "take" this operator
 		// - For left associative operator (all operator but **), consume the operator,
@@ -5579,12 +5598,24 @@ func (p *Parser) parsePrimaryExpression() *ast.Expression {
 	case ast.KindPrivateIdentifier:
 		return p.parsePrivateIdentifier()
 	}
+	if p.isEffectScript() && p.token == ast.KindIdentifier && p.scanner.TokenValue() == "effect" &&
+		!p.lookAhead((*Parser).nextTokenHasPrecedingLineBreak) && p.lookAhead((*Parser).nextTokenIsOpenBrace) {
+		return p.parseEffectBlockExpression()
+	}
 	return p.parseIdentifierWithDiagnostic(diagnostics.Expression_expected, nil)
+}
+
+func (p *Parser) nextTokenHasPrecedingLineBreak() bool {
+	p.nextToken()
+	return p.hasPrecedingLineBreak()
 }
 
 func (p *Parser) parseParenthesizedExpression() *ast.Expression {
 	pos := p.nodePos()
 	jsdoc := p.jsdocScannerInfo()
+	if p.isEffectScript() && p.inEffectBody && p.lookAhead((*Parser).nextIsBindArrow) {
+		return p.parseBindParenExpression()
+	}
 	p.parseExpected(ast.KindOpenParenToken)
 	expression := p.parseExpressionAllowIn()
 	p.parseExpected(ast.KindCloseParenToken)
