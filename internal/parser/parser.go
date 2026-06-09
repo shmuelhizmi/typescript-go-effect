@@ -82,6 +82,7 @@ type Parser struct {
 	hasDeprecatedTag            bool
 	hasParseError               bool
 	inEffectBody                bool
+	inMatchArmGuard             bool
 	effectHelpersUsed           map[string]struct{}
 
 	identifiers                map[string]string
@@ -4610,6 +4611,11 @@ func (p *Parser) parseBinaryExpressionRest(precedence ast.OperatorPrecedence, le
 		if p.inEffectBody && p.isAtBindArrow() {
 			// '<-' is the EffectScript BindArrow, not a relational operator;
 			// write 'a < -b' (with whitespace) for less-than-negation.
+			break
+		}
+		if p.inMatchArmGuard && p.token == ast.KindGreaterThanGreaterThanToken {
+			// '>>' terminates a match-arm guard (it is the arm separator),
+			// so it is never a shift operator there.
 			break
 		}
 		if p.isAtPipeOperator() {

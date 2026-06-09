@@ -65,6 +65,13 @@ func (p *Parser) tryParseEffectScriptStatement() *ast.Statement {
 		if p.inEffectBody && p.isAtBindArrow() {
 			return p.parseDiscardBindStatement()
 		}
+	default:
+		// Contextual keywords (out, async, yield, of, ...) scan as their own
+		// token kind rather than KindIdentifier, but are still legal bind
+		// targets: `out <- e`.
+		if p.inEffectBody && p.isBindingIdentifier() && p.lookAhead((*Parser).nextIsBindArrow) {
+			return p.parseBindStatement()
+		}
 	}
 	return nil
 }
@@ -421,7 +428,7 @@ func (p *Parser) makeGeneratorExpression(parameters *ast.NodeList, body *ast.Nod
 }
 
 // effectHelperImportOrder fixes the specifier order of the synthesized import.
-var effectHelperImportOrder = []string{"Effect", "Layer", "Context", "Fiber"}
+var effectHelperImportOrder = []string{"Effect", "Layer", "Context", "Fiber", "Match"}
 
 // injectEffectScriptImports prepends `import { Effect, Layer, ... } from
 // "effect";` for every helper namespace the lowering referenced that the user
@@ -678,6 +685,10 @@ func (p *Parser) tryParseEffectScriptExpression() *ast.Expression {
 		if p.inEffectBody && p.lookAhead((*Parser).nextIsRaiseOperandStart) {
 			return p.parseRaiseExpression()
 		}
+	case "match":
+		if p.lookAhead((*Parser).nextIsMatchExpressionStart) {
+			return p.parseMatchExpression()
+		}
 	case "fork":
 		if p.inEffectBody && p.lookAhead((*Parser).nextIsUnaryOperandStart) {
 			return p.parseForkOrJoinExpression("Effect", "fork")
@@ -771,7 +782,11 @@ func (p *Parser) parseCatchArmsPostfix(expr *ast.Expression, pos int) *ast.Expre
 
 	var handlers []*ast.Node
 	for p.token != ast.KindCloseBraceToken && p.token != ast.KindEndOfFile {
+		startTok := p.nodePos()
 		handlers = append(handlers, p.parseCatchArm())
+		if p.nodePos() == startTok {
+			p.nextToken() // progress guard
+		}
 	}
 	p.parseExpected(ast.KindCloseBraceToken)
 	end := p.nodePos()
@@ -866,4 +881,370 @@ func (p *Parser) isAtPostfixCatch() bool {
 		return false
 	}
 	return p.lookAhead((*Parser).nextTokenIsOpenBrace)
+}
+
+// ---- Cycle 7: match expressions ----
+
+type matchPatternKind int
+
+const (
+	matchPatternLiteral matchPatternKind = iota
+	matchPatternTag
+	matchPatternWildcard
+	matchPatternBinding
+	matchPatternObject
+)
+
+type matchPattern struct {
+	kind    matchPatternKind
+	literal *ast.Expression // matchPatternLiteral
+	name    string          // tag / binding name
+	fields  []matchField    // matchPatternObject
+}
+
+type matchField struct {
+	name string
+	pat  *matchPattern
+}
+
+// match [value|tag] (x) { arms }  ==>  Match.value(x).pipe(..., terminator)
+// (inside an effect body the arms become Effect.gen and the whole match is
+// bound with yield*; see TRANSPILATION.md §10)
+func (p *Parser) parseMatchExpression() *ast.Expression {
+	pos := p.nodePos()
+	p.nextToken() // consume 'match'
+	tagMode := false
+	if p.token == ast.KindIdentifier {
+		switch p.scanner.TokenValue() {
+		case "tag":
+			tagMode = true
+			p.nextToken()
+		case "value":
+			p.nextToken()
+		}
+	}
+	p.parseExpected(ast.KindOpenParenToken)
+	scrutinee := p.parseExpressionAllowIn()
+	p.parseExpected(ast.KindCloseParenToken)
+	p.parseExpected(ast.KindOpenBraceToken)
+
+	effectful := p.inEffectBody
+	value := p.makeHelperCall("Match", "value", []*ast.Node{scrutinee}, pos, p.nodePos())
+
+	var pipeArgs []*ast.Node
+	hasCatchAll := false
+	for p.token != ast.KindCloseBraceToken && p.token != ast.KindEndOfFile {
+		startTok := p.nodePos()
+		arm, isCatchAll := p.parseMatchArm(tagMode, effectful)
+		hasCatchAll = hasCatchAll || isCatchAll
+		pipeArgs = append(pipeArgs, arm)
+		if p.nodePos() == startTok {
+			p.nextToken() // progress guard
+		}
+	}
+	p.parseExpected(ast.KindCloseBraceToken)
+	end := p.nodePos()
+
+	if !hasCatchAll {
+		pipeArgs = append(pipeArgs, p.makeHelperAccess("Match", "exhaustive"))
+	}
+
+	pipeName := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier("pipe")))
+	pipeAccess := p.finishSynthesized(p.factory.NewPropertyAccessExpression(value, nil, pipeName, ast.NodeFlagsNone))
+	result := p.finishNodeWithEnd(p.factory.NewCallExpression(pipeAccess, nil, nil, p.newNodeList(core.NewTextRange(pos, end), pipeArgs), ast.NodeFlagsNone), pos, end)
+	if effectful {
+		yieldExpr := p.makeYieldStar(result, pos, end)
+		return p.finishNodeWithEnd(p.factory.NewParenthesizedExpression(yieldExpr), pos, end)
+	}
+	return result
+}
+
+func (p *Parser) parseMatchArm(tagMode bool, effectful bool) (arm *ast.Node, isCatchAll bool) {
+	armPos := p.nodePos()
+
+	patterns := []*matchPattern{p.parseMatchPattern()}
+	for p.token == ast.KindBarToken && !p.isAtPipeOperator() {
+		p.nextToken()
+		patterns = append(patterns, p.parseMatchPattern())
+	}
+	first := patterns[0]
+
+	binding := ""
+	if p.token == ast.KindAsKeyword {
+		p.nextToken()
+		binding = p.parseIdentifier().Text()
+	}
+
+	var guard *ast.Expression
+	if p.token == ast.KindIfKeyword {
+		p.nextToken()
+		saveGuard := p.inMatchArmGuard
+		p.inMatchArmGuard = true
+		guard = p.parseAssignmentExpressionOrHigher()
+		p.inMatchArmGuard = saveGuard
+	}
+
+	p.reScanGreaterThanToken()
+	p.parseExpected(ast.KindGreaterThanGreaterThanToken)
+	body := p.parseMatchArmBody(effectful)
+	armEnd := p.nodePos()
+
+	handlerParam := p.matchHandlerParam(first, binding)
+	handler := p.makeArrowWithParam(handlerParam, body, armPos, armEnd)
+
+	switch {
+	case first.kind == matchPatternWildcard || first.kind == matchPatternBinding:
+		return p.makeHelperCall("Match", "orElse", []*ast.Node{handler}, armPos, armEnd), true
+	case first.kind == matchPatternTag || tagMode:
+		if len(patterns) == 1 {
+			return p.makeHelperCall("Match", "tag", []*ast.Node{p.makeStringLiteral(first.name, armPos), handler}, armPos, armEnd), false
+		}
+		var props []*ast.Node
+		for _, pat := range patterns {
+			tagName := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier(pat.name)))
+			href := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier("h")))
+			props = append(props, p.finishSynthesized(p.factory.NewPropertyAssignment(nil, tagName, nil, nil, href)))
+		}
+		obj := p.finishSynthesized(p.factory.NewObjectLiteralExpression(p.newNodeList(core.NewTextRange(-1, -1), props), false))
+		tags := p.makeHelperCall("Match", "tags", []*ast.Node{obj}, armPos, armEnd)
+		iife := p.makeSingleParamArrow("h", tags, armPos, armEnd)
+		paren := p.finishSynthesized(p.factory.NewParenthesizedExpression(iife))
+		return p.finishNodeWithEnd(p.factory.NewCallExpression(paren, nil, nil, p.newNodeList(core.NewTextRange(armPos, armEnd), []*ast.Node{handler}), ast.NodeFlagsNone), armPos, armEnd), false
+	case guard != nil:
+		pred := p.makeMatchGuardPredicate(first, guard, armPos, armEnd)
+		return p.makeHelperCall("Match", "when", []*ast.Node{pred, handler}, armPos, armEnd), false
+	case first.kind == matchPatternLiteral && len(patterns) > 1:
+		args := make([]*ast.Node, 0, len(patterns)+1)
+		for _, pat := range patterns {
+			args = append(args, p.matchTestExpression(pat))
+		}
+		args = append(args, handler)
+		return p.makeHelperCall("Match", "whenOr", args, armPos, armEnd), false
+	default:
+		return p.makeHelperCall("Match", "when", []*ast.Node{p.matchTestExpression(first), handler}, armPos, armEnd), false
+	}
+}
+
+// parseMatchArmBody parses the arm RHS: a block (effect body when effectful)
+// or an expression; effectful arms lower into Effect.gen.
+func (p *Parser) parseMatchArmBody(effectful bool) *ast.Expression {
+	bodyPos := p.nodePos()
+	if !effectful {
+		if p.token == ast.KindOpenBraceToken {
+			// pure block arm: (params) => { ... } — keep the block as-is
+			block := p.parseFunctionBlock(ParseFlagsNone, nil)
+			return block
+		}
+		return p.parseAssignmentExpressionOrHigher()
+	}
+	var block *ast.Node
+	if p.token == ast.KindOpenBraceToken {
+		block = p.parseEffectFunctionBlock()
+	} else {
+		saveInEffectBody := p.inEffectBody
+		p.inEffectBody = true
+		value := p.parseAssignmentExpressionOrHigher()
+		p.inEffectBody = saveInEffectBody
+		ret := p.finishNodeWithEnd(p.factory.NewReturnStatement(value), bodyPos, p.nodePos())
+		block = p.finishNodeWithEnd(p.factory.NewBlock(p.newNodeList(core.NewTextRange(bodyPos, p.nodePos()), []*ast.Node{ret}), false), bodyPos, p.nodePos())
+	}
+	end := p.nodePos()
+	emptyParams := p.newNodeList(core.NewTextRange(-1, -1), nil)
+	return p.makeEffectCall("gen", []*ast.Node{p.makeGeneratorExpression(emptyParams, block, bodyPos, end)}, bodyPos, end)
+}
+
+func (p *Parser) parseMatchPattern() *matchPattern {
+	switch p.token {
+	case ast.KindNumericLiteral, ast.KindStringLiteral, ast.KindNoSubstitutionTemplateLiteral, ast.KindBigIntLiteral:
+		return &matchPattern{kind: matchPatternLiteral, literal: p.parseLiteralExpression(false)}
+	case ast.KindTrueKeyword, ast.KindFalseKeyword, ast.KindNullKeyword:
+		return &matchPattern{kind: matchPatternLiteral, literal: p.parseKeywordExpression()}
+	case ast.KindMinusToken:
+		pos := p.nodePos()
+		p.nextToken()
+		lit := p.parseLiteralExpression(false)
+		minus := p.finishNodeWithEnd(p.factory.NewPrefixUnaryExpression(ast.KindMinusToken, lit), pos, p.nodePos())
+		return &matchPattern{kind: matchPatternLiteral, literal: minus}
+	case ast.KindOpenBraceToken:
+		p.nextToken()
+		pat := &matchPattern{kind: matchPatternObject}
+		for p.token != ast.KindCloseBraceToken && p.token != ast.KindEndOfFile {
+			startTok := p.nodePos()
+			name := p.parseIdentifier().Text()
+			if p.token == ast.KindColonToken {
+				p.nextToken()
+				field := p.parseMatchPattern()
+				// Consume (and ignore for now) trailing or-pattern alternatives
+				// in a field value, e.g. `{ status: 301 | 302 }`. The structural
+				// test uses the first alternative; full field or-patterns are a
+				// later refinement.
+				for p.token == ast.KindBarToken && !p.isAtPipeOperator() {
+					p.nextToken()
+					p.parseMatchPattern()
+				}
+				pat.fields = append(pat.fields, matchField{name: name, pat: field})
+			} else {
+				pat.fields = append(pat.fields, matchField{name: name, pat: &matchPattern{kind: matchPatternBinding, name: name}})
+			}
+			if p.token == ast.KindCommaToken {
+				p.nextToken()
+			}
+			// Progress guard: never spin on an unexpected token.
+			if p.nodePos() == startTok {
+				p.nextToken()
+			}
+		}
+		p.parseExpected(ast.KindCloseBraceToken)
+		return pat
+	default:
+		name := p.parseIdentifier().Text()
+		switch {
+		case name == "_":
+			return &matchPattern{kind: matchPatternWildcard, name: name}
+		case len(name) > 0 && name[0] >= 'A' && name[0] <= 'Z':
+			return &matchPattern{kind: matchPatternTag, name: name}
+		default:
+			return &matchPattern{kind: matchPatternBinding, name: name}
+		}
+	}
+}
+
+// matchTestExpression builds the structural test value passed to Match.when:
+// literals stay, object patterns keep only their literal fields.
+func (p *Parser) matchTestExpression(pat *matchPattern) *ast.Expression {
+	switch pat.kind {
+	case matchPatternLiteral:
+		return pat.literal
+	case matchPatternObject:
+		var props []*ast.Node
+		for _, f := range pat.fields {
+			if f.pat.kind == matchPatternLiteral || f.pat.kind == matchPatternObject {
+				name := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier(f.name)))
+				props = append(props, p.finishSynthesized(p.factory.NewPropertyAssignment(nil, name, nil, nil, p.matchTestExpression(f.pat))))
+			}
+		}
+		return p.finishSynthesized(p.factory.NewObjectLiteralExpression(p.newNodeList(core.NewTextRange(-1, -1), props), false))
+	default:
+		return p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier("undefined")))
+	}
+}
+
+// matchHandlerParam builds the handler's parameter: the 'as' binding name, an
+// object binding pattern of the pattern's bindings, or a throwaway.
+func (p *Parser) matchHandlerParam(pat *matchPattern, binding string) *ast.Node {
+	if binding != "" {
+		return p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier(binding)))
+	}
+	if pat.kind == matchPatternBinding {
+		return p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier(pat.name)))
+	}
+	if pat.kind == matchPatternObject {
+		if bp := p.matchBindingPattern(pat); bp != nil {
+			return bp
+		}
+	}
+	return p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier("_")))
+}
+
+// matchBindingPattern builds `{ a, status: s }` binding patterns from the
+// binding fields of an object pattern (nil when there are none).
+func (p *Parser) matchBindingPattern(pat *matchPattern) *ast.Node {
+	var elements []*ast.Node
+	for _, f := range pat.fields {
+		switch f.pat.kind {
+		case matchPatternBinding:
+			name := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier(f.pat.name)))
+			var propName *ast.Node
+			if f.pat.name != f.name {
+				propName = p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier(f.name)))
+			}
+			elements = append(elements, p.finishSynthesized(p.factory.NewBindingElement(nil, propName, name, nil)))
+		case matchPatternObject:
+			if nested := p.matchBindingPattern(f.pat); nested != nil {
+				propName := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier(f.name)))
+				elements = append(elements, p.finishSynthesized(p.factory.NewBindingElement(nil, propName, nested, nil)))
+			}
+		}
+	}
+	if len(elements) == 0 {
+		return nil
+	}
+	return p.finishSynthesized(p.factory.NewBindingPattern(ast.KindObjectBindingPattern, p.newNodeList(core.NewTextRange(-1, -1), elements)))
+}
+
+// makeMatchGuardPredicate builds `(v) => «structural tests» && ((bindings) => guard)(v)`.
+func (p *Parser) makeMatchGuardPredicate(pat *matchPattern, guard *ast.Expression, pos int, end int) *ast.Expression {
+	v := func() *ast.Expression {
+		return p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier("v")))
+	}
+	var test *ast.Expression
+	if pat.kind == matchPatternObject {
+		for _, f := range pat.fields {
+			if f.pat.kind != matchPatternLiteral {
+				continue
+			}
+			fieldName := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier(f.name)))
+			access := p.finishSynthesized(p.factory.NewPropertyAccessExpression(v(), nil, fieldName, ast.NodeFlagsNone))
+			eq := p.finishSynthesized(p.factory.NewBinaryExpression(nil, access, nil, p.finishSynthesized(p.factory.NewToken(ast.KindEqualsEqualsEqualsToken)), f.pat.literal))
+			if test == nil {
+				test = eq
+			} else {
+				test = p.finishSynthesized(p.factory.NewBinaryExpression(nil, test, nil, p.finishSynthesized(p.factory.NewToken(ast.KindAmpersandAmpersandToken)), eq))
+			}
+		}
+	}
+	guardParam := p.matchHandlerParam(pat, "")
+	guardArrow := p.makeArrowWithParam(guardParam, guard, pos, end)
+	guardParen := p.finishSynthesized(p.factory.NewParenthesizedExpression(guardArrow))
+	guardCall := p.finishNodeWithEnd(p.factory.NewCallExpression(guardParen, nil, nil, p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{v()}), ast.NodeFlagsNone), pos, end)
+	cond := guardCall
+	if test != nil {
+		cond = p.finishSynthesized(p.factory.NewBinaryExpression(nil, test, nil, p.finishSynthesized(p.factory.NewToken(ast.KindAmpersandAmpersandToken)), guardCall))
+	}
+	return p.makeSingleParamArrowExpr("v", cond, pos, end)
+}
+
+func (p *Parser) makeArrowWithParam(param *ast.Node, body *ast.Expression, pos int, end int) *ast.Expression {
+	paramDecl := p.finishSynthesized(p.factory.NewParameterDeclaration(nil, nil, param, nil, nil, nil))
+	params := p.newNodeList(core.NewTextRange(-1, -1), []*ast.Node{paramDecl})
+	arrowToken := p.finishSynthesized(p.factory.NewToken(ast.KindEqualsGreaterThanToken))
+	return p.finishNodeWithEnd(p.factory.NewArrowFunction(nil, nil, params, nil, nil, arrowToken, body), pos, end)
+}
+
+func (p *Parser) makeSingleParamArrowExpr(name string, body *ast.Expression, pos int, end int) *ast.Expression {
+	ident := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier(name)))
+	return p.makeArrowWithParam(ident, body, pos, end)
+}
+
+// nextIsMatchExpressionStart commits to a match expression only for the exact
+// shape `match [value|tag] ( ... ) {` (otherwise `match(...)` stays a call).
+func (p *Parser) nextIsMatchExpressionStart() bool {
+	p.nextToken()
+	if p.hasPrecedingLineBreak() {
+		return false
+	}
+	if p.token == ast.KindIdentifier {
+		switch p.scanner.TokenValue() {
+		case "value", "tag":
+			p.nextToken()
+		}
+	}
+	if p.token != ast.KindOpenParenToken {
+		return false
+	}
+	depth := 0
+	for {
+		switch p.token {
+		case ast.KindOpenParenToken:
+			depth++
+		case ast.KindCloseParenToken:
+			depth--
+			if depth == 0 {
+				return p.nextToken() == ast.KindOpenBraceToken
+			}
+		case ast.KindEndOfFile:
+			return false
+		}
+		p.nextToken()
+	}
 }

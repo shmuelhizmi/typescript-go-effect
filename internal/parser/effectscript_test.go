@@ -218,3 +218,56 @@ effect f(id: string) {
 `)
 	assert.Equal(t, len(file.Diagnostics()), 0)
 }
+
+func TestEffectScriptMatchValueMode(t *testing.T) {
+	t.Parallel()
+	file := parseETS(t, `
+const label = match (res) {
+  { status: 200, body }      >> body
+  { status: 301 | 302 }      >> "redirect"
+  { status: s } if s >= 500  >> "server error"
+  _                          >> "unknown"
+};
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0)
+}
+
+func TestEffectScriptMatchTagMode(t *testing.T) {
+	t.Parallel()
+	file := parseETS(t, `
+const msg = match tag (err) {
+  NotFound as e       >> e.id
+  DbError | NetError  >> "infra"
+  _                   >> "other"
+};
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0)
+	stmts := file.Statements.Nodes
+	assert.Equal(t, stmts[0].Kind, ast.KindImportDeclaration) // Match import
+}
+
+func TestEffectScriptMatchAsCall(t *testing.T) {
+	t.Parallel()
+	// `match(x)` not followed by `{` stays an ordinary call expression.
+	file := parseETS(t, `
+declare function match(x: number): number;
+const y = match(1) + 2;
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0)
+}
+
+func TestEffectScriptMatchEffectful(t *testing.T) {
+	t.Parallel()
+	file := parseETS(t, `
+effect handle(err: unknown) {
+  out <- effect {
+    return match tag (err) {
+      NotFound as e >> { v <- recover(e); return v }
+      _             >> "n/a"
+    }
+  }
+  return out
+}
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0)
+}
