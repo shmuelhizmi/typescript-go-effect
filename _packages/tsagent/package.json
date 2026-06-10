@@ -1,6 +1,6 @@
 {
     "name": "@playfast/tsagent",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "license": "Apache-2.0",
     "description": "Agent-oriented TypeScript language service CLI: symbol maps, find-refs, rename, dead code, type intelligence, diagrams, speculative checks, and a session daemon — built on the native TypeScript compiler port (typescript-go).",
     "keywords": [
@@ -36,11 +36,11 @@
         "tsagent": "./bin/tsagent.js"
     },
     "optionalDependencies": {
-        "@playfast/tsagent-darwin-arm64": "0.1.0",
-        "@playfast/tsagent-darwin-x64": "0.1.0",
-        "@playfast/tsagent-linux-arm64": "0.1.0",
-        "@playfast/tsagent-linux-x64": "0.1.0",
-        "@playfast/tsagent-win32-arm64": "0.1.0",
-        "@playfast/tsagent-win32-x64": "0.1.0"
+        "@playfast/tsagent-darwin-arm64": "0.1.1",
+        "@playfast/tsagent-darwin-x64": "0.1.1",
+        "@playfast/tsagent-linux-arm64": "0.1.1",
+        "@playfast/tsagent-linux-x64": "0.1.1",
+        "@playfast/tsagent-win32-arm64": "0.1.1",
+        "@playfast/tsagent-win32-x64": "0.1.1"
     }
 }
