@@ -90,11 +90,13 @@ func init() {
 type refactorTxFlags struct {
 	apply       bool
 	allowErrors bool
+	strictGate  bool
 }
 
 func registerRefactorTxFlags(fs *flag.FlagSet, f *refactorTxFlags) {
 	fs.BoolVar(&f.apply, "apply", false, "apply the edits (default is a dry-run that prints a diff)")
 	fs.BoolVar(&f.allowErrors, "allow-errors", false, "apply even if new diagnostics would be introduced")
+	fs.BoolVar(&f.strictGate, "strict-gate", false, "also refuse on new unused-symbol diagnostics (TS6133 etc.; non-gating by default)")
 }
 
 type refactorTargetFlags struct {
@@ -143,7 +145,7 @@ func guessRefactorTargetSpec(arg string) core.TargetSpec {
 // finishRefactorTx runs the edit set through the transaction engine and maps
 // a gate refusal to exit code 4.
 func finishRefactorTx(ctx context.Context, ws *core.Workspace, es core.EditSet, tx *refactorTxFlags, notes []string) (*core.TxResult, error) {
-	result, err := core.Execute(ctx, ws, es, core.TxOpts{Apply: tx.apply, AllowErrors: tx.allowErrors})
+	result, err := core.Execute(ctx, ws, es, core.TxOpts{Apply: tx.apply, AllowErrors: tx.allowErrors, StrictGate: tx.strictGate})
 	if err != nil {
 		return nil, err
 	}

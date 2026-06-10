@@ -120,7 +120,7 @@ flowchart LR
 Most commands accept a *target* in any of three forms:
 
 1. **Position** — `file:line:col` (1-based line and column), e.g. `src/index.ts:11:21`.
-2. **Symbol ID** — `path#qualified.name`, e.g. `src/models.ts#Container.get`. Symbol IDs are printed by `map search`, `map outline --raw`, `nav calls`, and others; paths are always relative to the project root (the tsconfig directory), so IDs are stable regardless of your cwd. The qualified name extends through every *named scope* — functions, classes, namespaces, methods, and `const f = () => {}`-style declarators — so even function-local declarations have guessable IDs like `src/server.ts#startServer.logRequest` (blocks such as `if`/`for`/`try` are transparent; `map outline --locals` lists them). When sibling scopes declare the same name, a 0-based source-order ordinal disambiguates: `src/a.ts#f.msg~0`, `src/a.ts#f.msg~1`. Only declarations under *anonymous* scopes (callbacks, IIFEs) use the fallback form `path@bytePos`.
+2. **Symbol ID** — `path#qualified.name`, e.g. `src/models.ts#Container.get`. Symbol IDs are printed by `map search`, `map outline --raw`, `nav calls`, and others; paths are always relative to the project root (the tsconfig directory), so IDs are stable regardless of your cwd. The qualified name extends through every *named scope* — functions, classes, namespaces, methods, `const f = () => {}`-style declarators, and **named class/function expressions** (the factory pattern `export const f = (cfg) => class Name extends Base {…}` yields `src/x.ts#f.Name` and `src/x.ts#f.Name.method`, whether the class is the arrow's expression body, a `return class Name …`, or a declarator initializer) — so even function-local declarations have guessable IDs like `src/server.ts#startServer.logRequest` (blocks such as `if`/`for`/`try` are transparent; `map outline --locals` lists them). When sibling scopes declare the same name, a 0-based source-order ordinal disambiguates: `src/a.ts#f.msg~0`, `src/a.ts#f.msg~1`. Only declarations under *anonymous* scopes (callbacks, IIFEs, anonymous class expressions) use the fallback form `path@bytePos`.
 3. **Name** — `--name <identifier>` resolves a declaration by name project-wide; it must be unambiguous (exits 3 when there are no matches, errors when there are several — disambiguate with `--kind` where supported, or use a symbol ID).
 
 Refactor commands also accept the target as the first positional argument and guess the form (`file:line:col` → position, contains `#`/`@` → symbol ID, otherwise name).
@@ -139,7 +139,7 @@ The flagship editing primitive for LLMs: a terse, line-based script language tha
 ```
 tsagent edit <script-file|->                 # read the script from a file or stdin
 tsagent edit -e '<op line>' [-e '<op line>'…]  # inline ops, joined with newlines
-flags: --dry-run, --allow-errors
+flags: --dry-run, --allow-errors, --strict-gate
 ```
 
 **Grammar** (line-based; `#` comments; raw code via heredocs `<<TAG … TAG`, verbatim, no interpolation):
@@ -184,6 +184,8 @@ move src/server.ts#Router end src/router.ts
 Output: one `ok line N: <op>` per op (cross-file move notes in parens), the unified diffs, and a summary — `applied: 4 file(s) changed, 0 new errors, 1 fixed` (or `dry-run: 4 file(s) would change`). `--raw` returns `{"ops": [{"line", "op", "files", "notes"}…], "tx": {…}}`.
 
 **Semantics.** All byte offsets address the *original* file text (an `insert after X` anchored on a symbol the same script moves lands at X's original location). Within-file `move` and same-class member reorders are pure text moves — the trivia-aware declaration range travels with its leading JSDoc. Cross-file `move` (anchored `before`/`after` a symbol in another file, or `top`/`end <path>`) reuses the `mv-symbol` planner: imports are rewritten in every consumer, the declaration is exported in the destination when needed, and the source re-imports it if it still uses it — with the same v1 refusals (overloads, default exports, file-local unexported deps). Members cannot move across containers (`use delete + insert into`), function-local declarations cannot move, and `edit` never creates files (use `refactor mv-symbol --create`).
+
+**Blank-line hygiene.** Top-level `insert before|after` ops and the re-insertion half of moves keep exactly one blank line between the inserted block and the adjacent declaration, and a `delete` (or the vacated spot of a move) that would leave a double blank line eats one extra newline. `insert top` (and rewritten/prepended imports everywhere) lands **below** a shebang and the directive prologue, so a leading `"use client";` / `"use strict";` keeps its meaning. When a cross-file move empties the source file (no statements or imports left), the file itself is deleted and a `note:` reports it.
 
 **Exit codes:** 2 — syntax errors, illegal ops, or overlapping ops (`line 6: delete src/a.ts#f conflicts with replace at line 1 (overlapping ranges in src/a.ts)`); 3 — unresolvable symbols/paths (all reported together, with suggestions); 4 — diagnostics-gate refusal (nothing written; the new errors are listed).
 
@@ -249,7 +251,7 @@ shape  (declared: Shape)  src/shapes.ts
 
 ### `refactor` — transactional mutations
 
-All refactor commands share the transaction flags `--apply` and `--allow-errors` (see Transactions below). Targeted commands (`rename`, `safe-delete`, `inline`, `mv-symbol`, `signature`) share `--at file:line:col`, `--symbol <id>`, `--name <n>`, `--kind <k>` (or pass the target as the first positional argument).
+All refactor commands share the transaction flags `--apply`, `--allow-errors`, and `--strict-gate` (see Transactions below). Targeted commands (`rename`, `safe-delete`, `inline`, `mv-symbol`, `signature`) share `--at file:line:col`, `--symbol <id>`, `--name <n>`, `--kind <k>` (or pass the target as the first positional argument).
 
 | Command | Description | Extra flags |
 |---|---|---|
@@ -399,8 +401,9 @@ Every `refactor` command (and `check fix`) follows the same contract (**exceptio
 
 1. **Dry-run is the default.** The command computes the full edit set and prints unified diffs plus `dry-run: N file(s) would change (pass --apply to write)`. Nothing is written.
 2. **`--apply` writes atomically.** Before writing, tsagent rebuilds the program in memory with the edits applied and compares diagnostics. If **new** errors would appear, the apply is **refused** (exit 4), the new errors are listed, and the disk is untouched. Pre-existing errors elsewhere in the project do not block — only the *delta* matters.
-3. **`--allow-errors` bypasses the gate** when you know what you're doing.
-4. The result reports the diagnostics delta (`newErrors`, `fixedErrors`) so an agent immediately knows the consequences of its edit.
+3. **Unused-symbol diagnostics do not gate by default.** New TS6133/TS6192/TS6196/TS6198/TS6199 ("declared but never read/used") diagnostics — the ones `noUnusedLocals`/`noUnusedParameters` produce when you insert a helper *before* wiring it up — are kept out of `newErrors`, reported separately as `unusedWarnings`, and announced with `note: N unused-symbol diagnostic(s) introduced (not gating; --strict-gate to gate on them)`. Pass **`--strict-gate`** (available on `edit`, every `refactor` command, and `check fix`) to refuse on them too.
+4. **`--allow-errors` bypasses the gate** when you know what you're doing.
+5. The result reports the diagnostics delta (`newErrors`, `unusedWarnings`, `fixedErrors`) so an agent immediately knows the consequences of its edit.
 
 ## Speculative checks: `--with-diff` / `--with-edits`
 
@@ -485,13 +488,14 @@ All ten families of the spec (`docs/agent-cli-spec.md`) are implemented. What fo
 
 - **One tsconfig at a time.** The workspace is a single parsed project; project references are not fanned out.
 - The diagnostics gate and speculative checks build a second full program in memory — on very large projects expect `--apply`/`--with-diff` to cost roughly one extra type-check.
+- **Named class/function expressions are first-class scopes** (`map outline --symbol`, symbol IDs, `nav refs` all see `const f = () => class Name {…}` and its members); *anonymous* function-likes and class expressions remain addressable only through the `path@bytePos` fallback.
 
 **refactor**
 
 - **`apply-edits`** takes byte offsets against the files' *current* content and does no offset remapping; `--diff` mode applies each parsed patch as a whole-file replacement.
 - **`safe-delete --cascade`** sweeps unexported *top-level* symbols only (no class members), can leave now-unused import specifiers behind (run `organize-imports` after), and caps at 10 cascade rounds.
 - **`exports`** refuses re-exported defaults (`export { default } from`), `export =`, and namespace exports; on `--to default`, namespace-import consumers (`import * as ns`) are noted but not rewritten.
-- **`mv-symbol`** moves a single declaration only (no overloads or merged declarations), refuses symbols that reference file-local unexported dependencies (`--with-deps` is not implemented), refuses consumers that reach the symbol through namespace imports or re-exports, does not move default exports, and prepends new import statements rather than merging into existing ones.
+- **`mv-symbol`** moves a single declaration only (no overloads or merged declarations), refuses symbols that reference file-local unexported dependencies (`--with-deps` is not implemented), refuses consumers that reach the symbol through namespace imports or re-exports, does not move default exports, and prepends new import statements (below any shebang/directive prologue) rather than merging into existing ones. When the move empties the source file it is deleted (with a note); a leftover `export * from` pointing at the deleted file elsewhere is caught by the diagnostics gate, not rewritten.
 - **`inline`** handles const variables and single-return functions; its side-effect analysis for arguments is conservative; it is all-or-nothing (one un-inlinable site refuses the whole transaction).
 - **`extract`** supports `--into constant|function` only (no type extraction) and refuses ranges containing `return`, producing more than one output value, or writing to outer locals.
 - **`signature`** does add/remove/reorder only (no parameter retyping), refuses call sites that use spread arguments, and leaves non-call references (e.g. the function passed as a callback) untouched — the diagnostics gate is the backstop there.

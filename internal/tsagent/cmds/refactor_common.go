@@ -150,13 +150,59 @@ func refactorRemoveImportSpecifierEdit(file *ast.SourceFile, importDecl *ast.Nod
 	return icore.TextChange{TextRange: icore.NewTextRange(i, end), NewText: ""}
 }
 
-// refactorInsertImportEdit produces an edit inserting an import statement at
-// the top of a file.
-func refactorInsertImportEdit(names []string, specifier string) icore.TextChange {
-	return icore.TextChange{
-		TextRange: icore.NewTextRange(0, 0),
-		NewText:   "import { " + strings.Join(names, ", ") + " } from \"" + specifier + "\";\n",
+// importInsertOffset returns the byte offset at which new import statements
+// (or other prepended code) should be inserted in a file: after a shebang
+// (`#!...`) and after the leading directive prologue — the consecutive
+// string-literal expression statements (`"use client";`, `"use strict";`) at
+// the very top — at the start of the line following the last directive.
+// Returns 0 for files without either.
+func importInsertOffset(file *ast.SourceFile) int {
+	text := file.Text()
+	offset := len(scanner.GetShebang(text))
+	for _, stmt := range file.Statements.Nodes {
+		if !ast.IsPrologueDirective(stmt) {
+			break
+		}
+		offset = stmt.End()
 	}
+	// Advance to the start of the following line.
+	for offset < len(text) && (text[offset] == ' ' || text[offset] == '\t' || text[offset] == '\r') {
+		offset++
+	}
+	if offset < len(text) && text[offset] == '\n' {
+		offset++
+	}
+	return offset
+}
+
+// refactorInsertImportEdit produces an edit inserting an import statement at
+// the top of a file, below any shebang and directive prologue (so a leading
+// `"use client";` keeps its meaning).
+func refactorInsertImportEdit(file *ast.SourceFile, names []string, specifier string) icore.TextChange {
+	pos := importInsertOffset(file)
+	newText := "import { " + strings.Join(names, ", ") + " } from \"" + specifier + "\";\n"
+	if pos > 0 && file.Text()[pos-1] != '\n' {
+		// Directive (or shebang) without a trailing newline: keep it on its
+		// own line.
+		newText = "\n" + newText
+	}
+	return icore.TextChange{
+		TextRange: icore.NewTextRange(pos, pos),
+		NewText:   newText,
+	}
+}
+
+// refactorCollapseBlankAfterDeletion widens a whole-line deletion range by one
+// newline when removing it would leave two consecutive blank lines (a blank
+// line both before and after the removed range).
+func refactorCollapseBlankAfterDeletion(text string, r icore.TextRange) icore.TextRange {
+	pos, end := r.Pos(), r.End()
+	blankBefore := pos >= 2 && text[pos-1] == '\n' && text[pos-2] == '\n'
+	blankAfter := end < len(text) && text[end] == '\n'
+	if blankBefore && blankAfter {
+		return icore.NewTextRange(pos, end+1)
+	}
+	return r
 }
 
 // refactorIsSimpleExpression reports whether an expression can be substituted

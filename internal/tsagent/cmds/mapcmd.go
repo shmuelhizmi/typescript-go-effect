@@ -341,7 +341,7 @@ func runMapOutlineSymbol(ctx context.Context, ws *core.Workspace, flags *outline
 	}
 	var entries []*OutlineEntry
 	switch decl.Kind {
-	case ast.KindClassDeclaration, ast.KindInterfaceDeclaration:
+	case ast.KindClassDeclaration, ast.KindClassExpression, ast.KindInterfaceDeclaration:
 		entries = walker.memberEntries(decl.Members(), 1)
 	case ast.KindEnumDeclaration:
 		entries = walker.memberEntries(decl.AsEnumDeclaration().Members.Nodes, 1)
@@ -512,7 +512,7 @@ func (w *outlineWalker) scopeChildEntries(node *ast.Node, depth int) []*OutlineE
 // (local functions, named arrows) get their own locals.
 func (w *outlineWalker) localChildEntries(decl *ast.Node, depth int) []*OutlineEntry {
 	switch decl.Kind {
-	case ast.KindClassDeclaration, ast.KindInterfaceDeclaration:
+	case ast.KindClassDeclaration, ast.KindClassExpression, ast.KindInterfaceDeclaration:
 		return w.memberEntries(decl.Members(), depth)
 	case ast.KindEnumDeclaration:
 		return w.memberEntries(decl.AsEnumDeclaration().Members.Nodes, depth)
@@ -584,7 +584,9 @@ func (w *outlineWalker) newEntry(node *ast.Node, kind string) *OutlineEntry {
 }
 
 // signature renders a one-line signature: SignatureToString for callables,
-// TypeToString for values, both capped at 120 chars.
+// TypeToString for values, the aliased type's source text for type aliases
+// (TypeToString would just echo the alias name back), all capped at 120
+// chars.
 func (w *outlineWalker) signature(node *ast.Node, kind string) string {
 	switch node.Kind {
 	case ast.KindFunctionDeclaration, ast.KindMethodDeclaration, ast.KindMethodSignature,
@@ -594,8 +596,14 @@ func (w *outlineWalker) signature(node *ast.Node, kind string) string {
 			return ""
 		}
 		return cli.Truncate(w.checker.SignatureToStringEx(sig, w.file.AsNode(), checker.TypeFormatFlagsNone, nil), maxSignatureLen)
-	case ast.KindVariableDeclaration, ast.KindPropertyDeclaration, ast.KindPropertySignature,
-		ast.KindTypeAliasDeclaration:
+	case ast.KindTypeAliasDeclaration:
+		typeNode := node.Type()
+		if typeNode == nil {
+			return ""
+		}
+		src := strings.Join(strings.Fields(refactorNodeText(w.file, typeNode)), " ")
+		return cli.Truncate("= "+src, maxSignatureLen)
+	case ast.KindVariableDeclaration, ast.KindPropertyDeclaration, ast.KindPropertySignature:
 		t := w.checker.GetTypeAtLocation(node)
 		if t == nil {
 			return ""

@@ -389,3 +389,70 @@ export const handler = (req: string): number => {
 		t.Errorf("SuggestSymbolIDs max=2 returned %d results", len(got))
 	}
 }
+
+func TestSymbolIDClassExpressionFactory(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/factory.ts": `export interface Cfg { tag: string; }
+
+export const createTagNodeClass = (cfg: Cfg) => class TagNode {
+	tag(): string { return cfg.tag; }
+};
+
+export function blockFactory(cfg: Cfg) {
+	return class BlockNode {
+		label(): string { return cfg.tag; }
+	};
+}
+
+export const anonFactory = (cfg: Cfg) => class {
+	x(): number { return 1; }
+};
+`,
+	})
+	file, err := ws.FileOf("src/factory.ts")
+	if err != nil {
+		t.Fatalf("FileOf: %v", err)
+	}
+
+	// Expression-bodied arrow factory: the named class expression and its
+	// members round-trip through qualified IDs.
+	tagNode := findTestNode(t, file.AsNode(), ast.KindClassExpression, "TagNode")
+	if id := EncodeDeclID(ws, tagNode); id != "src/factory.ts#createTagNodeClass.TagNode" {
+		t.Errorf("EncodeDeclID(TagNode) = %q, want src/factory.ts#createTagNodeClass.TagNode", id)
+	}
+	_, decl, err := DecodeSymbolID(context.Background(), ws, "src/factory.ts#createTagNodeClass.TagNode")
+	if err != nil {
+		t.Fatalf("DecodeSymbolID(#createTagNodeClass.TagNode): %v", err)
+	}
+	if decl != tagNode {
+		t.Errorf("decode(#createTagNodeClass.TagNode) = %v at %d, want the class expression", decl.Kind, decl.Pos())
+	}
+
+	tagMethod := findTestNode(t, file.AsNode(), ast.KindMethodDeclaration, "tag")
+	if id := EncodeDeclID(ws, tagMethod); id != "src/factory.ts#createTagNodeClass.TagNode.tag" {
+		t.Errorf("EncodeDeclID(tag) = %q, want src/factory.ts#createTagNodeClass.TagNode.tag", id)
+	}
+	symbol, decl, err := DecodeSymbolID(context.Background(), ws, "src/factory.ts#createTagNodeClass.TagNode.tag")
+	if err != nil {
+		t.Fatalf("DecodeSymbolID(#createTagNodeClass.TagNode.tag): %v", err)
+	}
+	if symbol == nil || decl != tagMethod {
+		t.Errorf("decode of the class-expression method did not hand back the member (decl=%v)", decl)
+	}
+
+	// `return class BlockNode ...` inside a block body.
+	blockNode := findTestNode(t, file.AsNode(), ast.KindClassExpression, "BlockNode")
+	if id := EncodeDeclID(ws, blockNode); id != "src/factory.ts#blockFactory.BlockNode" {
+		t.Errorf("EncodeDeclID(BlockNode) = %q, want src/factory.ts#blockFactory.BlockNode", id)
+	}
+	if _, decl, err := DecodeSymbolID(context.Background(), ws, "src/factory.ts#blockFactory.BlockNode.label"); err != nil || decl == nil || decl.Kind != ast.KindMethodDeclaration {
+		t.Errorf("decode(#blockFactory.BlockNode.label) = %v, %v; want the method", decl, err)
+	}
+
+	// Anonymous class expressions keep the position fallback.
+	xMethod := findTestNode(t, file.AsNode(), ast.KindMethodDeclaration, "x")
+	if id := EncodeDeclID(ws, xMethod); !strings.Contains(id, "@") {
+		t.Errorf("EncodeDeclID(method of anonymous class) = %q, want a position fallback", id)
+	}
+}

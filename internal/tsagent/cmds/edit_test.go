@@ -445,6 +445,146 @@ func TestEditGateRefusalExit4AndAllowErrors(t *testing.T) {
 	}
 }
 
+func TestEditUnusedHelperPassesGateByDefault(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/tsconfig.json": `{"compilerOptions": {"strict": true, "target": "esnext", "noUnusedLocals": true}}`,
+		"/project/src/a.ts":      "export function f(): number {\n\treturn 1;\n}\n",
+	})
+	script := "insert after src/a.ts#f <<EOF\nfunction helper(): number {\n\treturn 2;\n}\nEOF\n"
+	result, err := runEditScript(t, ws, script, nil)
+	if err != nil {
+		t.Fatalf("inserting an unused helper must pass the gate by default: %v", err)
+	}
+	if !result.Tx.Applied || len(result.Tx.NewErrors) != 0 {
+		t.Fatalf("tx = %+v, want applied with no gating errors", result.Tx)
+	}
+	if len(result.Tx.UnusedWarnings) != 1 || result.Tx.UnusedWarnings[0].Code != "TS6133" {
+		t.Errorf("UnusedWarnings = %+v, want one TS6133", result.Tx.UnusedWarnings)
+	}
+	found := false
+	for _, note := range result.Tx.Notes {
+		if strings.Contains(note, "unused-symbol diagnostic(s) introduced") && strings.Contains(note, "--strict-gate") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("notes = %v, want the unused-symbol note", result.Tx.Notes)
+	}
+	out := renderEditText(t, result)
+	if !strings.Contains(out, "unused src/a.ts") || !strings.Contains(out, "note: 1 unused-symbol diagnostic(s) introduced") {
+		t.Errorf("text output should surface the unused warning and note:\n%s", out)
+	}
+}
+
+func TestEditStrictGateRefusesUnusedHelper(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/tsconfig.json": `{"compilerOptions": {"strict": true, "target": "esnext", "noUnusedLocals": true}}`,
+		"/project/src/a.ts":      "export function f(): number {\n\treturn 1;\n}\n",
+	})
+	script := "insert after src/a.ts#f <<EOF\nfunction helper(): number {\n\treturn 2;\n}\nEOF\n"
+	_, err := runEditScript(t, ws, script, &editFlags{strictGate: true})
+	if err == nil || cli.ExitCode(err) != cli.ExitRefused {
+		t.Fatalf("--strict-gate should refuse the unused helper, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "TS6133") {
+		t.Errorf("refusal should list the unused diagnostic: %q", err.Error())
+	}
+	if !strings.Contains(readWorkspaceFile(t, ws, "/project/src/a.ts"), "export function f") ||
+		strings.Contains(readWorkspaceFile(t, ws, "/project/src/a.ts"), "helper") {
+		t.Error("a refused apply must leave the files untouched")
+	}
+}
+
+func TestEditRealTypeErrorStillRefusesByDefault(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/tsconfig.json": `{"compilerOptions": {"strict": true, "target": "esnext", "noUnusedLocals": true}}`,
+		"/project/src/a.ts":      "export function f(): number {\n\treturn 1;\n}\n",
+	})
+	script := "insert after src/a.ts#f <<EOF\nexport const broken: number = \"nope\";\nEOF\n"
+	_, err := runEditScript(t, ws, script, nil)
+	if err == nil || cli.ExitCode(err) != cli.ExitRefused {
+		t.Fatalf("a real type error must still refuse, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "TS2322") {
+		t.Errorf("refusal should list the type error: %q", err.Error())
+	}
+}
+
+func TestEditInsertAfterSeparatedByBlankLine(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export function f(): number {\n\treturn 1;\n}\n\nexport function g(): number {\n\treturn 2;\n}\n",
+	})
+	script := "insert after src/a.ts#f <<EOF\nexport function added(): number {\n\treturn 3;\n}\nEOF\n"
+	mustRunEditScript(t, ws, script)
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	if !strings.Contains(text, "}\n\nexport function added") {
+		t.Errorf("inserted block should be separated from f by one blank line:\n%s", text)
+	}
+	if strings.Contains(text, "}\nexport function added") || strings.Contains(text, "\n\n\n") {
+		t.Errorf("want exactly one blank line around the insert:\n%s", text)
+	}
+}
+
+func TestEditInsertBeforeFirstDeclSeparatedByBlankLine(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export function f(): number {\n\treturn 1;\n}\n",
+	})
+	script := "insert before src/a.ts#f <<EOF\nexport function added(): number {\n\treturn 3;\n}\nEOF\n"
+	mustRunEditScript(t, ws, script)
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	want := "export function added(): number {\n\treturn 3;\n}\n\nexport function f(): number {\n\treturn 1;\n}\n"
+	if text != want {
+		t.Errorf("a.ts = %q, want %q", text, want)
+	}
+}
+
+func TestEditMoveAwayLeavesSingleBlankLine(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export function f1(): number {\n\treturn 1;\n}\n\nexport function f2(): number {\n\treturn 2;\n}\n\nexport function f3(): number {\n\treturn 3;\n}\n",
+	})
+	mustRunEditScript(t, ws, "move src/a.ts#f2 after src/a.ts#f3\n")
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	if strings.Contains(text, "\n\n\n") {
+		t.Errorf("the vacated spot must not leave a double blank line:\n%s", text)
+	}
+	indexOrder(t, text, "function f1", "function f3", "function f2")
+	if !strings.Contains(text, "}\n\nexport function f2") {
+		t.Errorf("the moved block should be separated from f3 by one blank line:\n%s", text)
+	}
+}
+
+func TestEditDeleteBetweenDeclsLeavesSingleBlankLine(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export function f1(): number {\n\treturn 1;\n}\n\nfunction dead(): number {\n\treturn 0;\n}\n\nexport function f3(): number {\n\treturn 3;\n}\n",
+	})
+	mustRunEditScript(t, ws, "delete src/a.ts#dead\n")
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	want := "export function f1(): number {\n\treturn 1;\n}\n\nexport function f3(): number {\n\treturn 3;\n}\n"
+	if text != want {
+		t.Errorf("a.ts = %q, want %q", text, want)
+	}
+}
+
+func TestEditInsertTopRespectsUseClientDirective(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "\"use client\";\nexport function f(): number {\n\treturn 1;\n}\n",
+	})
+	script := "insert top src/a.ts <<EOF\nexport const HEADER = 1;\nEOF\n"
+	mustRunEditScript(t, ws, script)
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	if !strings.HasPrefix(text, "\"use client\";\nexport const HEADER = 1;\n") {
+		t.Errorf("insert top must land below the directive prologue:\n%s", text)
+	}
+}
+
 func TestEditDryRunWritesNothing(t *testing.T) {
 	t.Parallel()
 	ws := newTestWorkspace(t, map[string]any{

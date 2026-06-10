@@ -662,3 +662,34 @@ func TestNavPathUnreachable(t *testing.T) {
 		t.Error("expected a cli.ExitError")
 	}
 }
+
+func TestNavRefsClassExpressionMethodSymbol(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/factory.ts": `export const makeGreeter = (prefix: string) => class FactoryGreeter {
+	greet(name: string): string { return prefix + name; }
+};
+
+export function use(): string {
+	const G = makeGreeter("hi ");
+	return new G().greet("you");
+}
+`,
+	})
+	result, err := runNavRefs(context.Background(), ws, &refsFlags{symbol: "src/factory.ts#makeGreeter.FactoryGreeter.greet", groupBy: "file"}, nil)
+	if err != nil {
+		t.Fatalf("runNavRefs(class-expression method): %v", err)
+	}
+	if result.Totals == 0 || len(result.Refs) == 0 {
+		t.Fatalf("result = %+v, want at least the call site", result)
+	}
+	foundCall := false
+	for _, ref := range result.Refs {
+		if ref.UsageKind == "call" && strings.Contains(ref.Context, "new G().greet") {
+			foundCall = true
+		}
+	}
+	if !foundCall {
+		t.Errorf("refs = %+v, want the new G().greet call site", result.Refs)
+	}
+}

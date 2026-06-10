@@ -40,6 +40,7 @@ func init() {
 			fs.Var(&f.exprs, "e", "one edit-script line (repeatable; lines are joined with newlines)")
 			fs.BoolVar(&f.dryRun, "dry-run", false, "print per-op results and diffs without writing")
 			fs.BoolVar(&f.allowErrors, "allow-errors", false, "apply even if new diagnostics would be introduced")
+			fs.BoolVar(&f.strictGate, "strict-gate", false, "also refuse on new unused-symbol diagnostics (TS6133 etc.; non-gating by default)")
 			return f
 		},
 		Run: func(ctx context.Context, ws *core.Workspace, flags any, args []string) (any, error) {
@@ -60,6 +61,7 @@ type editFlags struct {
 	exprs       editLineFlags
 	dryRun      bool
 	allowErrors bool
+	strictGate  bool
 
 	// stdin is the reader used when the script argument is `-`; overridable
 	// by tests. Defaults to os.Stdin.
@@ -109,8 +111,14 @@ func (r *EditScriptResult) WriteText(w io.Writer) error {
 		for _, e := range r.Tx.NewErrors {
 			p("  new %s:%d:%d %s: %s\n", e.File, e.Line, e.Col, e.Code, e.Message)
 		}
+		for _, e := range r.Tx.UnusedWarnings {
+			p("  unused %s:%d:%d %s: %s\n", e.File, e.Line, e.Col, e.Code, e.Message)
+		}
 	} else {
 		p("dry-run: %d file(s) would change\n", len(r.Tx.FilesChanged))
+	}
+	for _, note := range r.Tx.Notes {
+		p("note: %s\n", note)
 	}
 	return err
 }
@@ -148,7 +156,7 @@ func runEdit(ctx context.Context, ws *core.Workspace, f *editFlags, args []strin
 		return nil, cli.UsageErrorf("%s", strings.Join(b.msgs, "\n"))
 	}
 
-	tx, err := core.Execute(ctx, ws, b.es, core.TxOpts{Apply: !f.dryRun, AllowErrors: f.allowErrors})
+	tx, err := core.Execute(ctx, ws, b.es, core.TxOpts{Apply: !f.dryRun, AllowErrors: f.allowErrors, StrictGate: f.strictGate})
 	if err != nil {
 		return nil, err
 	}
@@ -348,7 +356,7 @@ func (b *editBuilder) buildOp(ctx context.Context, r editResolvedOp) error {
 	op := r.op
 	switch op.Verb {
 	case "delete":
-		dr := refactorDeletionRange(r.declFile, r.declNode)
+		dr := refactorCollapseBlankAfterDeletion(r.declFile.Text(), refactorDeletionRange(r.declFile, r.declNode))
 		b.claim(op, r.declFile.FileName(), dr)
 		b.addEdit(r.declFile.FileName(), icore.TextChange{TextRange: dr, NewText: ""})
 		b.report(op, nil, b.ws.RelPath(r.declFile.FileName()))
@@ -363,10 +371,7 @@ func (b *editBuilder) buildOp(ctx context.Context, r editResolvedOp) error {
 			b.failf(op, "%v", err)
 			return nil
 		}
-		newText := editEnsureNewline(op.Body)
-		if pos > 0 && file.Text()[pos-1] != '\n' {
-			newText = "\n" + newText
-		}
+		newText := editSeparateBlock(r, file, pos, editEnsureNewline(op.Body))
 		b.addEdit(file.FileName(), icore.TextChange{TextRange: icore.NewTextRange(pos, pos), NewText: newText})
 		b.report(op, nil, b.ws.RelPath(file.FileName()))
 	case "move":
@@ -375,7 +380,8 @@ func (b *editBuilder) buildOp(ctx context.Context, r editResolvedOp) error {
 	return nil
 }
 
-// editInsertPos resolves an insert op's file and byte offset.
+// editInsertPos resolves an insert op's file and byte offset. `top` lands
+// below any shebang and directive prologue (`"use client";`), never above it.
 func editInsertPos(r editResolvedOp) (*ast.SourceFile, int, error) {
 	switch r.op.Place.Kind {
 	case "before":
@@ -383,7 +389,7 @@ func editInsertPos(r editResolvedOp) (*ast.SourceFile, int, error) {
 	case "after":
 		return r.anchorFile, refactorDeletionRange(r.anchorFile, r.anchorNode).End(), nil
 	case "top":
-		return r.destFile, 0, nil
+		return r.destFile, importInsertOffset(r.destFile), nil
 	case "end":
 		return r.destFile, len(r.destFile.Text()), nil
 	case "into":
@@ -394,6 +400,42 @@ func editInsertPos(r editResolvedOp) (*ast.SourceFile, int, error) {
 		return r.anchorFile, pos, nil
 	}
 	return nil, 0, fmt.Errorf("unknown insert place %q", r.op.Place.Kind)
+}
+
+// editSeparateBlock prepares inserted raw code for the target position: it
+// never glues to a non-newline, and a top-level before/after insert is
+// separated from the adjacent declaration by exactly one blank line (inserts
+// into class bodies and file top/end keep the single-newline behavior).
+func editSeparateBlock(r editResolvedOp, file *ast.SourceFile, pos int, newText string) string {
+	text := file.Text()
+	if pos > 0 && text[pos-1] != '\n' {
+		newText = "\n" + newText
+	}
+	if r.anchorNode == nil || r.anchorNode.Parent == nil || r.anchorNode.Parent.Kind != ast.KindSourceFile {
+		return newText
+	}
+	switch r.op.Place.Kind {
+	case "after":
+		if !editBlankLineBefore(text, pos) {
+			newText = "\n" + newText
+		}
+	case "before":
+		if !editBlankLineAt(text, pos) {
+			newText += "\n"
+		}
+	}
+	return newText
+}
+
+// editBlankLineBefore reports whether the text directly before pos already
+// ends with a blank line (or pos is the start of the file).
+func editBlankLineBefore(text string, pos int) bool {
+	return pos == 0 || (pos >= 2 && text[pos-1] == '\n' && text[pos-2] == '\n')
+}
+
+// editBlankLineAt reports whether pos sits on a blank line (or at EOF).
+func editBlankLineAt(text string, pos int) bool {
+	return pos >= len(text) || text[pos] == '\n'
 }
 
 // editInsertIntoPos computes the offset for `insert into <container>`: after
@@ -444,13 +486,13 @@ func (b *editBuilder) buildMove(ctx context.Context, r editResolvedOp) error {
 		case !topLevel:
 			b.failf(op, "cannot move a function-local declaration")
 		case r.destFile == r.declFile:
-			pos := 0
+			pos := importInsertOffset(r.declFile)
 			if op.Place.Kind == "end" {
 				pos = len(r.declFile.Text())
 			}
 			b.reorder(op, r.declFile, r.declNode, pos)
 		default:
-			insertPos := 0
+			insertPos := importInsertOffset(r.destFile)
 			if op.Place.Kind == "end" {
 				insertPos = -1 // planner appends, handling the trailing newline
 			}
@@ -493,7 +535,10 @@ func (b *editBuilder) buildMove(ctx context.Context, r editResolvedOp) error {
 
 // reorder emits a within-file move: delete the declaration's trivia-aware
 // range and re-insert the exact same bytes (newline-terminated) at insertPos.
-// Both offsets address the original text; the engine merges them.
+// Both offsets address the original text; the engine merges them. Top-level
+// moves get blank-line hygiene: one blank line separates the re-inserted
+// block from its before/after anchor, and a deletion that would leave a
+// double blank line eats one extra newline.
 func (b *editBuilder) reorder(op editOp, file *ast.SourceFile, node *ast.Node, insertPos int) {
 	text := file.Text()
 	dr := refactorDeletionRange(file, node)
@@ -501,8 +546,26 @@ func (b *editBuilder) reorder(op editOp, file *ast.SourceFile, node *ast.Node, i
 	if insertPos > 0 && text[insertPos-1] != '\n' {
 		moved = "\n" + moved
 	}
-	b.claim(op, file.FileName(), dr)
-	b.addEdit(file.FileName(), icore.TextChange{TextRange: dr, NewText: ""})
+	delRange := dr
+	if node.Parent != nil && node.Parent.Kind == ast.KindSourceFile {
+		delRange = refactorCollapseBlankAfterDeletion(text, dr)
+		switch op.Place.Kind {
+		case "after":
+			if !editBlankLineBefore(text, insertPos) {
+				moved = "\n" + moved
+			}
+		case "before", "top":
+			if !editBlankLineAt(text, insertPos) {
+				moved += "\n"
+			}
+		case "end":
+			if !editBlankLineBefore(text, insertPos) {
+				moved = "\n" + moved
+			}
+		}
+	}
+	b.claim(op, file.FileName(), delRange)
+	b.addEdit(file.FileName(), icore.TextChange{TextRange: delRange, NewText: ""})
 	b.addEdit(file.FileName(), icore.TextChange{TextRange: icore.NewTextRange(insertPos, insertPos), NewText: moved})
 	b.report(op, nil, b.ws.RelPath(file.FileName()))
 }

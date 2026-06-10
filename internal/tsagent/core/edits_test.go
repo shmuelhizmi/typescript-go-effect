@@ -124,6 +124,57 @@ func TestTxGateRefusesErrorIntroducingEdit(t *testing.T) {
 	}
 }
 
+func TestTxGateUnusedDiagnosticsDoNotGateByDefault(t *testing.T) {
+	t.Parallel()
+	files := map[string]any{
+		"/project/tsconfig.json": `{"compilerOptions": {"strict": true, "target": "esnext", "noUnusedLocals": true}}`,
+		"/project/src/a.ts":      "export const answer: number = 41;\n",
+	}
+	ws := newTestWorkspace(t, files)
+
+	// Appending an unused helper introduces TS6133 under noUnusedLocals; the
+	// gate must let it through, report it as an UnusedWarning, and note it.
+	appendHelper := func(ws *Workspace) EditSet {
+		text := mustReadFile(t, ws, "/project/src/a.ts")
+		return EditSet{Edits: []FileEdit{{
+			FileName: "/project/src/a.ts",
+			Edits: []core.TextChange{{
+				TextRange: core.NewTextRange(len(text), len(text)),
+				NewText:   "function helper(): number {\n\treturn 2;\n}\n",
+			}},
+		}}}
+	}
+	result, err := Execute(context.Background(), ws, appendHelper(ws), TxOpts{Apply: true, SingleThreaded: true})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !result.Applied || result.Refused || len(result.NewErrors) != 0 {
+		t.Fatalf("result = %+v, want applied with no gating errors", result)
+	}
+	if len(result.UnusedWarnings) != 1 || result.UnusedWarnings[0].Code != "TS6133" {
+		t.Fatalf("UnusedWarnings = %+v, want one TS6133", result.UnusedWarnings)
+	}
+	if len(result.Notes) != 1 || !strings.Contains(result.Notes[0], "not gating; --strict-gate") {
+		t.Errorf("Notes = %v, want the unused-symbol note", result.Notes)
+	}
+
+	// StrictGate restores the refusal.
+	ws2 := newTestWorkspace(t, map[string]any{
+		"/project/tsconfig.json": `{"compilerOptions": {"strict": true, "target": "esnext", "noUnusedLocals": true}}`,
+		"/project/src/a.ts":      "export const answer: number = 41;\n",
+	})
+	result2, err := Execute(context.Background(), ws2, appendHelper(ws2), TxOpts{Apply: true, StrictGate: true, SingleThreaded: true})
+	if err != nil {
+		t.Fatalf("Execute --strict-gate: %v", err)
+	}
+	if !result2.Refused || result2.Applied {
+		t.Fatalf("result = %+v, want refused under StrictGate", result2)
+	}
+	if len(result2.NewErrors) != 1 || result2.NewErrors[0].Code != "TS6133" {
+		t.Errorf("NewErrors = %+v, want the TS6133 gating", result2.NewErrors)
+	}
+}
+
 func TestTxGateCountsFixedErrors(t *testing.T) {
 	t.Parallel()
 	ws := newTestWorkspace(t, map[string]any{"/project/src/a.ts": "export const broken: number = \"bad\";\n"})

@@ -160,3 +160,45 @@ func TestScopeDeclarationsLocalFunctionIsItselfAContainer(t *testing.T) {
 		t.Errorf("ScopeDeclarations(localFn) = %v, want [hidden]", got)
 	}
 }
+
+func TestScopeDeclarationsNamedClassExpressions(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/factory.ts": `export const exprFactory = () => class ExprNode {
+	m(): number { return 1; }
+};
+
+export function blockFactory() {
+	const Local = class NamedLocal {};
+	(class Stmt {});
+	return class RetNode {};
+}
+
+export const anonExpr = () => class {};
+`,
+	})
+	file, err := ws.FileOf("src/factory.ts")
+	if err != nil {
+		t.Fatalf("FileOf: %v", err)
+	}
+	binder.BindSourceFile(file)
+
+	// Expression-bodied arrow: the named class expression is its scope content.
+	exprFactory := findTestNode(t, file.AsNode(), ast.KindVariableDeclaration, "exprFactory")
+	if got := declNames(ScopeDeclarations(exprFactory)); !slices.Equal(got, []string{"ExprNode"}) {
+		t.Errorf("ScopeDeclarations(exprFactory) = %v, want [ExprNode]", got)
+	}
+
+	// Block body: declarator initializers, expression statements, and return
+	// expressions all surface named class expressions.
+	blockFactory := findTestNode(t, file.AsNode(), ast.KindFunctionDeclaration, "blockFactory")
+	if got := declNames(ScopeDeclarations(blockFactory)); !slices.Equal(got, []string{"Local", "NamedLocal", "Stmt", "RetNode"}) {
+		t.Errorf("ScopeDeclarations(blockFactory) = %v, want [Local NamedLocal Stmt RetNode]", got)
+	}
+
+	// Anonymous class expressions stay invisible.
+	anonExpr := findTestNode(t, file.AsNode(), ast.KindVariableDeclaration, "anonExpr")
+	if got := ScopeDeclarations(anonExpr); got != nil {
+		t.Errorf("anonymous class expression should be invisible, got %v", declNames(got))
+	}
+}

@@ -659,3 +659,71 @@ func TestMapOutlineSymbolUsageErrors(t *testing.T) {
 		t.Error("expected not-found error for unknown --symbol")
 	}
 }
+
+func TestMapOutlineSymbolClassExpressionFactory(t *testing.T) {
+	t.Parallel()
+	files := map[string]any{
+		"/project/src/create-tag-node.ts": `export interface Cfg { tag: string; }
+
+export const createTagNodeClass = (cfg: Cfg) => class TagNode {
+	tag(): string { return cfg.tag; }
+	upper(): string { return cfg.tag.toUpperCase(); }
+};
+`,
+	}
+
+	// --symbol on the factory shows the class expression with its members.
+	ws := newTestWorkspace(t, files)
+	result, err := runMapOutlineSymbol(context.Background(), ws, &outlineFlags{depth: "all", symbol: "src/create-tag-node.ts#createTagNodeClass"}, nil)
+	if err != nil {
+		t.Fatalf("runMapOutlineSymbol(factory): %v", err)
+	}
+	tagNode := findEntry(result.Entries, "TagNode")
+	if tagNode == nil || tagNode.Kind != "class" {
+		t.Fatalf("entries = %+v, want a class entry named TagNode", result.Entries)
+	}
+	if tagNode.SymbolID != "src/create-tag-node.ts#createTagNodeClass.TagNode" {
+		t.Errorf("TagNode symbol ID = %q", tagNode.SymbolID)
+	}
+	if m := findEntry(tagNode.Children, "tag"); m == nil || m.Kind != "method" {
+		t.Errorf("TagNode children = %+v, want the tag method", tagNode.Children)
+	}
+	if m := findEntry(tagNode.Children, "upper"); m == nil {
+		t.Errorf("TagNode children = %+v, want the upper method", tagNode.Children)
+	}
+
+	// --symbol directly on the class expression shows the members as entries.
+	result2, err := runMapOutlineSymbol(context.Background(), ws, &outlineFlags{depth: "all", symbol: "src/create-tag-node.ts#createTagNodeClass.TagNode"}, nil)
+	if err != nil {
+		t.Fatalf("runMapOutlineSymbol(class expression): %v", err)
+	}
+	if result2.Kind != "class" || result2.Name != "TagNode" {
+		t.Errorf("header = %s/%s, want class/TagNode", result2.Kind, result2.Name)
+	}
+	if m := findEntry(result2.Entries, "tag"); m == nil || m.Kind != "method" {
+		t.Errorf("entries = %+v, want the tag method", result2.Entries)
+	}
+}
+
+func TestMapOutlineTypeAliasSignatureUsesSourceText(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/aliases.ts": "export type Foo = { a: string } | null;\nexport type Long = {\n\ta: string;\n\tb: number;\n};\n",
+	})
+	result, err := runMapOutline(context.Background(), ws, &outlineFlags{depth: "all"}, []string{"src/aliases.ts"})
+	if err != nil {
+		t.Fatalf("runMapOutline: %v", err)
+	}
+	entries := findFileOutline(t, result, "src/aliases.ts").Entries
+	foo := findEntry(entries, "Foo")
+	if foo == nil {
+		t.Fatal("missing Foo entry")
+	}
+	if foo.Signature != "= { a: string } | null" {
+		t.Errorf("Foo signature = %q, want the aliased type's source text, not the alias name", foo.Signature)
+	}
+	long := findEntry(entries, "Long")
+	if long == nil || long.Signature != "= { a: string; b: number; }" {
+		t.Errorf("Long signature = %q, want whitespace-collapsed source text", long.Signature)
+	}
+}

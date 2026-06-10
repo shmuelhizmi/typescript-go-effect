@@ -209,9 +209,30 @@ type TxOpts struct {
 	Apply bool
 	// AllowErrors applies even when the diagnostics gate finds new errors.
 	AllowErrors bool
+	// StrictGate makes unused-symbol diagnostics (TS6133 and friends) gate
+	// the apply like real errors. By default they are reported as
+	// UnusedWarnings but do not refuse the transaction, so inserting a
+	// helper before wiring it up works under noUnusedLocals.
+	StrictGate bool
 	// SingleThreaded builds the speculative gate program single-threaded
 	// (used by tests).
 	SingleThreaded bool
+}
+
+// unusedDiagCodes are the unused-symbol diagnostic codes that do not gate a
+// transaction by default (TxOpts.StrictGate restores gating):
+//
+//	TS6133 '{0}' is declared but its value is never read.
+//	TS6192 All imports in import declaration are unused.
+//	TS6196 '{0}' is declared but never used.
+//	TS6198 All destructured elements are unused.
+//	TS6199 All variables are unused.
+var unusedDiagCodes = map[string]bool{
+	"TS6133": true,
+	"TS6192": true,
+	"TS6196": true,
+	"TS6198": true,
+	"TS6199": true,
 }
 
 // FileDiff is the rendered diff of one affected file.
@@ -241,8 +262,12 @@ type TxResult struct {
 	FilesChanged []string   `json:"filesChanged"`
 	Diffs        []FileDiff `json:"diffs"`
 	NewErrors    []TxDiag   `json:"newErrors,omitempty"`
-	FixedErrors  int        `json:"fixedErrors"`
-	Notes        []string   `json:"notes,omitempty"`
+	// UnusedWarnings are newly introduced unused-symbol diagnostics (TS6133
+	// and friends). They never gate the apply unless TxOpts.StrictGate moved
+	// them into NewErrors instead.
+	UnusedWarnings []TxDiag `json:"unusedWarnings,omitempty"`
+	FixedErrors    int      `json:"fixedErrors"`
+	Notes          []string `json:"notes,omitempty"`
 }
 
 // WriteText renders the compact text form: the unified diffs followed by a
@@ -277,6 +302,11 @@ func (r *TxResult) WriteText(w io.Writer) error {
 		}
 		for _, d := range r.NewErrors {
 			if _, err := fmt.Fprintf(w, "  new %s:%d:%d %s: %s\n", d.File, d.Line, d.Col, d.Code, d.Message); err != nil {
+				return err
+			}
+		}
+		for _, d := range r.UnusedWarnings {
+			if _, err := fmt.Fprintf(w, "  unused %s:%d:%d %s: %s\n", d.File, d.Line, d.Col, d.Code, d.Message); err != nil {
 				return err
 			}
 		}
@@ -511,6 +541,23 @@ func Execute(ctx context.Context, ws *Workspace, es EditSet, opts TxOpts) (*TxRe
 	newErrors, fixed, err := diagnosticsDelta(ctx, ws, plan, opts.SingleThreaded)
 	if err != nil {
 		return nil, fmt.Errorf("building speculative program for the diagnostics gate: %w", err)
+	}
+	// Unused-symbol diagnostics (TS6133 and friends) do not gate by default:
+	// inserting a helper before wiring it up is a legitimate workflow under
+	// noUnusedLocals. --strict-gate keeps them gating.
+	if !opts.StrictGate {
+		gating := newErrors[:0:0]
+		for _, d := range newErrors {
+			if unusedDiagCodes[d.Code] {
+				result.UnusedWarnings = append(result.UnusedWarnings, d)
+			} else {
+				gating = append(gating, d)
+			}
+		}
+		newErrors = gating
+		if n := len(result.UnusedWarnings); n > 0 {
+			result.Notes = append(result.Notes, fmt.Sprintf("%d unused-symbol diagnostic(s) introduced (not gating; --strict-gate to gate on them)", n))
+		}
 	}
 	result.NewErrors = newErrors
 	result.FixedErrors = fixed

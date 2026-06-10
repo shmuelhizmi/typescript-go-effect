@@ -45,8 +45,9 @@ func TestSymbolMoveAnchoredInsertPos(t *testing.T) {
 	if err != nil {
 		t.Fatalf("planSymbolMove: %v", err)
 	}
-	if len(notes) != 0 {
-		t.Errorf("notes = %v, want none", notes)
+	// util.ts held only the moved declaration: it becomes empty and is deleted.
+	if len(notes) != 1 || !strings.Contains(notes[0], "src/util.ts became empty and was deleted") {
+		t.Errorf("notes = %v, want the empty-source deletion note", notes)
 	}
 	result, err := core.Execute(context.Background(), ws, es, core.TxOpts{Apply: true, SingleThreaded: true})
 	if err != nil {
@@ -56,13 +57,16 @@ func TestSymbolMoveAnchoredInsertPos(t *testing.T) {
 		t.Fatalf("result = %+v, want clean apply", result)
 	}
 	math := readWorkspaceFile(t, ws, "/project/src/math.ts")
-	want := "export const PI = 3.14;\n/** Doubles a number. */\nexport function double(n: number): number {\n\treturn n * 2;\n}\nexport const TAU = 6.28;\n"
+	want := "export const PI = 3.14;\n\n/** Doubles a number. */\nexport function double(n: number): number {\n\treturn n * 2;\n}\n\nexport const TAU = 6.28;\n"
 	if math != want {
 		t.Errorf("math.ts = %q, want %q", math, want)
 	}
 	main := readWorkspaceFile(t, ws, "/project/src/main.ts")
 	if !strings.Contains(main, "import { double } from \"./math\";") {
 		t.Errorf("importer not rewritten: %q", main)
+	}
+	if ws.FS.FileExists("/project/src/util.ts") {
+		t.Error("util.ts became empty and should have been deleted")
 	}
 }
 
@@ -90,7 +94,7 @@ func TestSymbolMoveAnchoredKeepsDepImportsAtTop(t *testing.T) {
 		t.Fatalf("result = %+v, want clean apply", result)
 	}
 	dest := readWorkspaceFile(t, ws, "/project/src/dest.ts")
-	want := "import { BASE } from \"./base\";\nexport const first = 1;\nexport function scaled(n: number): number {\n\treturn n * BASE;\n}\nexport const last = 2;\n"
+	want := "import { BASE } from \"./base\";\nexport const first = 1;\n\nexport function scaled(n: number): number {\n\treturn n * BASE;\n}\n\nexport const last = 2;\n"
 	if dest != want {
 		t.Errorf("dest.ts = %q, want %q", dest, want)
 	}
@@ -127,6 +131,115 @@ func TestSymbolMoveBatchesIntoOneEditSet(t *testing.T) {
 	util := readWorkspaceFile(t, ws, "/project/src/util.ts")
 	if strings.Contains(util, "f1") || strings.Contains(util, "f2") {
 		t.Errorf("util.ts should no longer hold the moved functions: %q", util)
+	}
+}
+
+func TestSymbolMoveImporterRewriteRespectsUseClientDirective(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/util.ts": "export function double(n: number): number {\n\treturn n * 2;\n}\nexport const keep = 1;\n",
+		"/project/src/math.ts": "export const PI = 3.14;\n",
+		"/project/src/main.ts": "\"use client\";\n\nimport { double } from \"./util\";\nexport const d = double(2);\n",
+	})
+	declNode, symbol := resolveMoveTarget(t, ws, "double")
+	destFile := ws.Program.GetSourceFile("/project/src/math.ts")
+	var es core.EditSet
+	if _, err := planSymbolMove(context.Background(), ws, declNode, symbol,
+		symbolMoveDest{fileAbs: "/project/src/math.ts", file: destFile, insertPos: -1}, &es); err != nil {
+		t.Fatalf("planSymbolMove: %v", err)
+	}
+	result, err := core.Execute(context.Background(), ws, es, core.TxOpts{Apply: true, SingleThreaded: true})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !result.Applied || len(result.NewErrors) != 0 {
+		t.Fatalf("result = %+v, want clean apply", result)
+	}
+	main := readWorkspaceFile(t, ws, "/project/src/main.ts")
+	if !strings.HasPrefix(main, "\"use client\";\n") {
+		t.Errorf("the \"use client\" directive must stay first:\n%s", main)
+	}
+	idxDirective := strings.Index(main, "\"use client\";")
+	idxImport := strings.Index(main, "import { double } from \"./math\";")
+	if idxImport < 0 || idxImport < idxDirective {
+		t.Errorf("rewritten import must land AFTER the directive:\n%s", main)
+	}
+}
+
+func TestSymbolMoveDestDepImportsRespectDirectiveAndShebang(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/base.ts": "export const BASE = 10;\n",
+		"/project/src/util.ts": "import { BASE } from \"./base\";\nexport function scaled(n: number): number {\n\treturn n * BASE;\n}\nexport const ten = BASE;\n",
+		"/project/src/dest.ts": "#!/usr/bin/env node\n\"use strict\";\n\"use client\";\nexport const first = 1;\n",
+		"/project/src/main.ts": "import { scaled } from \"./util\";\nexport const s = scaled(2);\n",
+	})
+	declNode, symbol := resolveMoveTarget(t, ws, "scaled")
+	destFile := ws.Program.GetSourceFile("/project/src/dest.ts")
+	var es core.EditSet
+	if _, err := planSymbolMove(context.Background(), ws, declNode, symbol,
+		symbolMoveDest{fileAbs: "/project/src/dest.ts", file: destFile, insertPos: -1}, &es); err != nil {
+		t.Fatalf("planSymbolMove: %v", err)
+	}
+	result, err := core.Execute(context.Background(), ws, es, core.TxOpts{Apply: true, SingleThreaded: true})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !result.Applied || len(result.NewErrors) != 0 {
+		t.Fatalf("result = %+v, want clean apply", result)
+	}
+	dest := readWorkspaceFile(t, ws, "/project/src/dest.ts")
+	if !strings.HasPrefix(dest, "#!/usr/bin/env node\n\"use strict\";\n\"use client\";\n") {
+		t.Errorf("shebang + directive prologue must stay at the very top:\n%s", dest)
+	}
+	indexOrder(t, dest, "#!/usr/bin/env node", "\"use strict\";", "\"use client\";",
+		"import { BASE } from \"./base\";", "export const first = 1;", "export function scaled")
+}
+
+func TestImportInsertOffsetNoDirectivesIsZero(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/plain.ts": "export const x = 1;\n",
+	})
+	file := ws.Program.GetSourceFile("/project/src/plain.ts")
+	if got := importInsertOffset(file); got != 0 {
+		t.Errorf("importInsertOffset(plain file) = %d, want 0", got)
+	}
+}
+
+func TestSymbolMoveKeepsNonEmptySource(t *testing.T) {
+	t.Parallel()
+	// util.ts keeps a second declaration: the source file must NOT be deleted.
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/util.ts": "export function double(n: number): number {\n\treturn n * 2;\n}\n\nexport const keep = 1;\n",
+		"/project/src/math.ts": "export const PI = 3.14;\n",
+	})
+	declNode, symbol := resolveMoveTarget(t, ws, "double")
+	destFile := ws.Program.GetSourceFile("/project/src/math.ts")
+	var es core.EditSet
+	notes, err := planSymbolMove(context.Background(), ws, declNode, symbol,
+		symbolMoveDest{fileAbs: "/project/src/math.ts", file: destFile, insertPos: -1}, &es)
+	if err != nil {
+		t.Fatalf("planSymbolMove: %v", err)
+	}
+	for _, note := range notes {
+		if strings.Contains(note, "deleted") {
+			t.Errorf("unexpected deletion note: %v", notes)
+		}
+	}
+	if len(es.Ops) != 0 {
+		t.Errorf("ops = %+v, want no file ops", es.Ops)
+	}
+	result, err := core.Execute(context.Background(), ws, es, core.TxOpts{Apply: true, SingleThreaded: true})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !result.Applied {
+		t.Fatalf("result = %+v, want applied", result)
+	}
+	util := readWorkspaceFile(t, ws, "/project/src/util.ts")
+	if !strings.Contains(util, "export const keep = 1;") {
+		t.Errorf("util.ts lost its remaining declaration: %q", util)
 	}
 }
 

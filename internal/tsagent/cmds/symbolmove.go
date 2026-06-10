@@ -106,16 +106,31 @@ func planSymbolMove(ctx context.Context, ws *core.Workspace, declNode *ast.Node,
 	wasExported := declNode.ModifierFlags()&ast.ModifierFlagsExport != 0
 
 	// (a) Remove the declaration from the source file; (d) import it back if
-	// the source still references it.
+	// the source still references it. When the deletion leaves the file empty
+	// (whitespace only — no statements, no imports), delete the file instead
+	// of leaving a husk.
 	deletionRange := refactorDeletionRange(sourceFile, declNode)
-	sourceEdits := []icore.TextChange{{TextRange: deletionRange, NewText: ""}}
-	if sourceStillUses {
-		sourceEdits = append(sourceEdits, refactorInsertImportEdit([]string{symbolName},
-			refactorModuleSpecifierText(ws, sourceFile.FileName(), dest.fileAbs)))
-		notes = append(notes, fmt.Sprintf("%s still uses %s and now imports it from %s",
-			ws.RelPath(sourceFile.FileName()), symbolName, ws.RelPath(dest.fileAbs)))
+	sourceDeleted := false
+	if !sourceStillUses {
+		remaining := sourceText[:deletionRange.Pos()] + sourceText[deletionRange.End():]
+		if strings.TrimSpace(remaining) == "" {
+			sourceDeleted = true
+			es.Ops = append(es.Ops, core.FileOp{Kind: core.FileOpDelete, Path: sourceFile.FileName()})
+			notes = append(notes, fmt.Sprintf("%s became empty and was deleted", ws.RelPath(sourceFile.FileName())))
+		}
 	}
-	es.Edits = append(es.Edits, core.FileEdit{FileName: sourceFile.FileName(), Edits: sourceEdits})
+	if !sourceDeleted {
+		// Eat one extra newline when the deletion would leave a double blank
+		// line behind (the moved text itself keeps the original range).
+		sourceEdits := []icore.TextChange{{TextRange: refactorCollapseBlankAfterDeletion(sourceText, deletionRange), NewText: ""}}
+		if sourceStillUses {
+			sourceEdits = append(sourceEdits, refactorInsertImportEdit(sourceFile, []string{symbolName},
+				refactorModuleSpecifierText(ws, sourceFile.FileName(), dest.fileAbs)))
+			notes = append(notes, fmt.Sprintf("%s still uses %s and now imports it from %s",
+				ws.RelPath(sourceFile.FileName()), symbolName, ws.RelPath(dest.fileAbs)))
+		}
+		es.Edits = append(es.Edits, core.FileEdit{FileName: sourceFile.FileName(), Edits: sourceEdits})
+	}
 
 	// (b)+(c) Build the moved text, exporting it when anything references it.
 	movedText := sourceText[deletionRange.Pos():deletionRange.End()]
@@ -138,12 +153,24 @@ func planSymbolMove(ctx context.Context, ws *core.Workspace, declNode *ast.Node,
 		destText := dest.file.Text()
 		var destEdits []icore.TextChange
 		if destImports != "" {
-			destEdits = append(destEdits, icore.TextChange{TextRange: icore.NewTextRange(0, 0), NewText: destImports})
+			importPos := importInsertOffset(dest.file)
+			if importPos > 0 && destText[importPos-1] != '\n' {
+				destImports = "\n" + destImports
+			}
+			destEdits = append(destEdits, icore.TextChange{TextRange: icore.NewTextRange(importPos, importPos), NewText: destImports})
 		}
 		if dest.insertPos >= 0 {
 			// Anchored insert: the moved text ends with a newline and goes at
-			// the anchor offset as-is (zero-width change).
-			destEdits = append(destEdits, icore.TextChange{TextRange: icore.NewTextRange(dest.insertPos, dest.insertPos), NewText: movedText})
+			// the anchor offset (zero-width change), separated from adjacent
+			// top-level code by one blank line on each side.
+			insert := movedText
+			if !editBlankLineAt(destText, dest.insertPos) {
+				insert += "\n"
+			}
+			if !editBlankLineBefore(destText, dest.insertPos) {
+				insert = "\n" + insert
+			}
+			destEdits = append(destEdits, icore.TextChange{TextRange: icore.NewTextRange(dest.insertPos, dest.insertPos), NewText: insert})
 		} else {
 			insert := "\n" + movedText
 			if strings.HasSuffix(destText, "\n") {
@@ -187,7 +214,7 @@ func planSymbolMove(ctx context.Context, ws *core.Workspace, declNode *ast.Node,
 		if localName != symbolName {
 			importName = symbolName + " as " + localName
 		}
-		edits = append(edits, refactorInsertImportEdit([]string{importName}, newSpecRel(refFile)))
+		edits = append(edits, refactorInsertImportEdit(refFile, []string{importName}, newSpecRel(refFile)))
 		es.Edits = append(es.Edits, core.FileEdit{FileName: refFile.FileName(), Edits: edits})
 	}
 
