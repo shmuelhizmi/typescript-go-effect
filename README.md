@@ -1,6 +1,18 @@
-# TypeScript 7
+# TypeScript 7 — EffectScript fork
 
-[Not sure what this is? Read the announcement post!](https://devblogs.microsoft.com/typescript/typescript-native-port/)
+This fork extends the native TypeScript compiler with **EffectScript**: a
+TypeScript superset (`.ets` / `.etsx` files) that gives first-class syntax to
+the [Effect](https://effect.website) library, the way JSX does for React —
+`x <- e` binds, `raise`, postfix `catch { Tag >> … }` arms, Rust-style
+`match` / `match tag`, `service` / `layer` declarations, `par`/`race`/`fork`/
+`join`, the `|>` pipeline, and more, all lowering to idiomatic `Effect` code.
+
+**Start here: [docs/effectscript/README.md](./docs/effectscript/README.md)** —
+spec, grammar, transpilation rules, examples, and implementation status.
+
+---
+
+[Not sure what typescript-go is? Read the announcement post!](https://devblogs.microsoft.com/typescript/typescript-native-port/)
 
 ## Preview
 
