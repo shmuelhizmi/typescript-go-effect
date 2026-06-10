@@ -13,7 +13,11 @@ against the current tree.
 | Phase 2 v0 — `effect` declarations, `effect {}` blocks, binds (`x <- e`, `<- e`, `(<- e)`), `raise`/`raise.die`, auto-import | ✅ parse-time lowering (`internal/parser/effectscript.go`) |
 | Phase 2 — service/layer/catch/match/par/race/fork/join/using/defer/`|>`/`raises` sugar, export modifiers, decorator combinators | ✅ |
 | Phase 2 acceptance — golden corpus harness (`internal/parser/effectscript_corpus_test.go`, `UPDATE_EFFECT_BASELINES=1` to regen) | ✅ |
-| Phase 3+ — dedicated AST kinds + preserve mode, native checking (1810x diagnostics), LSP | ⬜ |
+| Module resolution — `./x.js` specifiers resolve to `.ets`/`.etsx`; declaration emit (`.d.ts` with inferred `Effect.Effect<A, E, R>`) | ✅ |
+| Diagnostics — 18100/18101/18150/18151 emitted from the parser | ✅ |
+| LSP basics — `.ets` files open (languageId or extension), hover/symbol resolution on lowered trees, fourslash smoke | ✅ |
+| Runtime validation — kitchen-sink + resources/Ref/guards/class methods/cross-module programs run against the real `effect` npm package | ✅ |
+| Phase 3+ — dedicated AST kinds + preserve mode, full native checking (18110/18120/18152/18153), rich LSP (completions for arms, rename, semantic tokens) | ⬜ |
 
 Known v0 deviations / issues (tracked for the native-checking phase):
 
