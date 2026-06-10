@@ -1,0 +1,25 @@
+id = "effectscript"
+name = "EffectScript"
+version = "0.0.1"
+schema_version = 1
+authors = ["typescript-go-effect"]
+description = "EffectScript (.ets/.etsx) language support powered by the typescript-go-effect language server (tsgo --lsp)."
+repository = "https://github.com/shmuelhizmi/typescript-go-effect"
+
+[language_servers.effectscript-lsp]
+name = "EffectScript Language Server"
+languages = ["EffectScript", "EffectScript React"]
+
+# Reuse the tree-sitter TypeScript/TSX grammars for syntax highlighting.
+# Highlighting treats EffectScript's contextual keywords (effect, raise, <-,
+# match, ...) as ordinary identifiers/operators; the language server provides
+# the real diagnostics, hover, go-to-definition and completions.
+[grammars.typescript]
+repository = "https://github.com/tree-sitter/tree-sitter-typescript"
+commit = "b1bf4825d9eaa0f3bdeb1e52f099533328acfbdf"
+path = "typescript"
+
+[grammars.tsx]
+repository = "https://github.com/tree-sitter/tree-sitter-typescript"
+commit = "b1bf4825d9eaa0f3bdeb1e52f099533328acfbdf"
+path = "tsx"
