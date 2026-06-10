@@ -35,9 +35,18 @@ type Request struct {
 // Params is the params shape for registry-dispatched methods
 // ("<family>/<name>"): flag values by flag name plus positional args.
 // Admin methods ("session/…") use method-specific param shapes instead.
+//
+// Format/Limit/Offset support `--connect` routing: when Format is "text" or
+// "ndjson" the server renders the result through the same output layer the
+// local CLI uses and returns {"rendered": "<bytes>"} so the client can print
+// it verbatim; "json"/"" keeps the structured envelope result. Limit/Offset
+// apply the CLI's list windowing server-side.
 type Params struct {
-	Flags map[string]any `json:"flags,omitempty"`
-	Args  []string       `json:"args,omitempty"`
+	Flags  map[string]any `json:"flags,omitempty"`
+	Args   []string       `json:"args,omitempty"`
+	Format string         `json:"format,omitempty"`
+	Limit  int            `json:"limit,omitempty"`
+	Offset int            `json:"offset,omitempty"`
 }
 
 // Response is one ndjson JSON-RPC response line. Exactly one of Result and

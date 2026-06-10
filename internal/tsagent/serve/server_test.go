@@ -285,6 +285,88 @@ func TestOverlaysList(t *testing.T) {
 	}
 }
 
+const brokenA = `export const n: number = "not a number";`
+
+func TestSnapshotSaveRestoreRoundTrip(t *testing.T) {
+	t.Parallel()
+	session, _ := newTestSession(t, map[string]any{"/project/src/a.ts": validA}, nil)
+	c := startServer(t, session)
+
+	// Baseline snapshot with no overlays.
+	clean := decodeJSON(t, mustRaw(t, decodeJSON(t, c.mustResult("session/snapshot/save", map[string]any{"name": "clean"}))["result"]))
+	if clean["name"] != "clean" || clean["files"] != float64(0) {
+		t.Errorf("snapshot save clean = %v, want {name: clean, files: 0}", clean)
+	}
+	if createdAt, _ := clean["createdAt"].(string); createdAt == "" {
+		t.Errorf("snapshot save clean has no createdAt: %v", clean)
+	}
+
+	// Overlay a type error, snapshot it as "broken".
+	c.mustResult("session/overlays/set", map[string]any{"file": "src/a.ts", "content": brokenA})
+	if items := checkItems(t, c); len(items) != 1 {
+		t.Fatalf("after broken overlay: %d diagnostics, want 1", len(items))
+	}
+	broken := decodeJSON(t, mustRaw(t, decodeJSON(t, c.mustResult("session/snapshot/save", map[string]any{"name": "broken"}))["result"]))
+	if broken["files"] != float64(1) {
+		t.Errorf("snapshot save broken files = %v, want 1", broken["files"])
+	}
+
+	// Change the overlay back to valid content: diagnostics disappear.
+	c.mustResult("session/overlays/set", map[string]any{"file": "src/a.ts", "content": validA})
+	if items := checkItems(t, c); len(items) != 0 {
+		t.Fatalf("after fixing overlay: %d diagnostics, want 0", len(items))
+	}
+
+	// Restore "broken": overlays replaced wholesale + rebuild on next check.
+	c.mustResult("session/snapshot/restore", map[string]any{"name": "broken"})
+	items := checkItems(t, c)
+	if len(items) != 1 {
+		t.Fatalf("after restore broken: %d diagnostics, want 1: %v", len(items), items)
+	}
+	if items[0].(map[string]any)["code"] != "TS2322" {
+		t.Errorf("restored diagnostic = %v, want TS2322", items[0])
+	}
+
+	// Restore "clean": overlays wiped (snapshot had none).
+	c.mustResult("session/snapshot/restore", map[string]any{"name": "clean"})
+	if items := checkItems(t, c); len(items) != 0 {
+		t.Fatalf("after restore clean: %d diagnostics, want 0", len(items))
+	}
+	var overlays []any
+	if err := json.Unmarshal(mustRaw(t, decodeJSON(t, c.mustResult("session/overlays/list", nil))["result"]), &overlays); err != nil {
+		t.Fatalf("overlays/list: %v", err)
+	}
+	if len(overlays) != 0 {
+		t.Errorf("after restore clean: %d overlays, want 0: %v", len(overlays), overlays)
+	}
+
+	// list is sorted by name and reflected in session/status.
+	var list []map[string]any
+	if err := json.Unmarshal(mustRaw(t, decodeJSON(t, c.mustResult("session/snapshot/list", nil))["result"]), &list); err != nil {
+		t.Fatalf("snapshot/list: %v", err)
+	}
+	if len(list) != 2 || list[0]["name"] != "broken" || list[1]["name"] != "clean" {
+		t.Errorf("snapshot/list = %v, want [broken clean]", list)
+	}
+	status := decodeJSON(t, mustRaw(t, decodeJSON(t, c.mustResult("session/status", nil))["result"]))
+	var statusSnaps []map[string]any
+	if err := json.Unmarshal(mustRaw(t, status["snapshots"]), &statusSnaps); err != nil {
+		t.Fatalf("status snapshots: %v", err)
+	}
+	if len(statusSnaps) != 2 {
+		t.Errorf("status snapshots = %v, want 2 entries", statusSnaps)
+	}
+
+	// drop removes; restore/drop of unknown names are not-found errors.
+	dropped := decodeJSON(t, mustRaw(t, decodeJSON(t, c.mustResult("session/snapshot/drop", map[string]any{"name": "broken"}))["result"]))
+	if dropped["dropped"] != "broken" || dropped["snapshotCount"] != float64(1) {
+		t.Errorf("snapshot/drop = %v", dropped)
+	}
+	c.mustError("session/snapshot/restore", map[string]any{"name": "broken"}, serve.CodeNotFound)
+	c.mustError("session/snapshot/drop", map[string]any{"name": "broken"}, serve.CodeNotFound)
+	c.mustError("session/snapshot/save", nil, serve.CodeInvalidParams) // missing name
+}
+
 func TestStatusFields(t *testing.T) {
 	t.Parallel()
 	session, _ := newTestSession(t, map[string]any{"/project/src/a.ts": validA}, nil)

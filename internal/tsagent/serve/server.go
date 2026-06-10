@@ -74,6 +74,7 @@ type Session struct {
 
 	overlays      map[string]string // normalized absolute path → content
 	overlaysDirty bool              // overlays changed since last build
+	snapshots     map[string]overlaySnapshot
 
 	ws        *core.Workspace
 	mtimes    map[string]mtimeEntry // snapshot at last build
@@ -85,6 +86,14 @@ type Session struct {
 type mtimeEntry struct {
 	modTime time.Time
 	exists  bool
+}
+
+// overlaySnapshot is a named deep copy of the overlay map (in-memory, daemon
+// lifetime only) — lets an agent explore two edit strategies and compare
+// `check` results between them (spec §4.10).
+type overlaySnapshot struct {
+	overlays  map[string]string
+	createdAt time.Time
 }
 
 // NewSession resolves the project and builds the initial Workspace.
@@ -120,6 +129,7 @@ func NewSession(opts SessionOptions) (*Session, error) {
 		statFn:         statFn,
 		singleThreaded: opts.SingleThreaded,
 		overlays:       map[string]string{},
+		snapshots:      map[string]overlaySnapshot{},
 		started:        time.Now(),
 	}
 	configPath, err := ResolveConfigPath(fs, cwd, opts.Project)
@@ -271,6 +281,56 @@ func (s *Session) ListOverlays() []OverlayInfo {
 	return infos
 }
 
+// SnapshotInfo describes one named overlay snapshot (session/snapshot/list,
+// session/status).
+type SnapshotInfo struct {
+	Name      string    `json:"name"`
+	Files     int       `json:"files"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// SaveSnapshot deep-copies the current overlay map under name (overwriting
+// any previous snapshot with the same name).
+func (s *Session) SaveSnapshot(name string) SnapshotInfo {
+	snap := overlaySnapshot{overlays: maps.Clone(s.overlays), createdAt: time.Now()}
+	if snap.overlays == nil {
+		snap.overlays = map[string]string{}
+	}
+	s.snapshots[name] = snap
+	return SnapshotInfo{Name: name, Files: len(snap.overlays), CreatedAt: snap.createdAt}
+}
+
+// RestoreSnapshot replaces the overlay map wholesale with the named
+// snapshot's copy and marks the session dirty so the next request rebuilds.
+func (s *Session) RestoreSnapshot(name string) (SnapshotInfo, error) {
+	snap, ok := s.snapshots[name]
+	if !ok {
+		return SnapshotInfo{}, cli.NotFoundErrorf("no snapshot named %q (session/snapshot/list)", name)
+	}
+	s.overlays = maps.Clone(snap.overlays)
+	s.overlaysDirty = true
+	return SnapshotInfo{Name: name, Files: len(snap.overlays), CreatedAt: snap.createdAt}, nil
+}
+
+// DropSnapshot removes a named snapshot.
+func (s *Session) DropSnapshot(name string) error {
+	if _, ok := s.snapshots[name]; !ok {
+		return cli.NotFoundErrorf("no snapshot named %q (session/snapshot/list)", name)
+	}
+	delete(s.snapshots, name)
+	return nil
+}
+
+// ListSnapshots returns all snapshots sorted by name.
+func (s *Session) ListSnapshots() []SnapshotInfo {
+	infos := make([]SnapshotInfo, 0, len(s.snapshots))
+	for name, snap := range s.snapshots {
+		infos = append(infos, SnapshotInfo{Name: name, Files: len(snap.overlays), CreatedAt: snap.createdAt})
+	}
+	slices.SortFunc(infos, func(a, b SnapshotInfo) int { return strings.Compare(a.Name, b.Name) })
+	return infos
+}
+
 // refactorApplyPolicy documents the v1 mutation rule (see Server.dispatch):
 // refactor */--apply writes to the real FS through the overlay-wrapped
 // ws.FS, so overlay contents would silently shadow the bytes just written.
@@ -280,15 +340,16 @@ const refactorApplyPolicy = "refactor --apply is refused over RPC while session 
 
 // Status is the session/status result.
 type Status struct {
-	ConfigPath          string  `json:"configPath"`
-	UptimeSeconds       float64 `json:"uptimeSeconds"`
-	ProgramFiles        int     `json:"programFiles"`
-	OverlayCount        int     `json:"overlayCount"`
-	Rebuilds            int     `json:"rebuilds"`
-	LastBuildMs         float64 `json:"lastBuildMs"`
-	HeapAllocBytes      uint64  `json:"heapAllocBytes"`
-	HeapSysBytes        uint64  `json:"heapSysBytes"`
-	RefactorApplyPolicy string  `json:"refactorApplyPolicy"`
+	ConfigPath          string         `json:"configPath"`
+	UptimeSeconds       float64        `json:"uptimeSeconds"`
+	ProgramFiles        int            `json:"programFiles"`
+	OverlayCount        int            `json:"overlayCount"`
+	Snapshots           []SnapshotInfo `json:"snapshots"`
+	Rebuilds            int            `json:"rebuilds"`
+	LastBuildMs         float64        `json:"lastBuildMs"`
+	HeapAllocBytes      uint64         `json:"heapAllocBytes"`
+	HeapSysBytes        uint64         `json:"heapSysBytes"`
+	RefactorApplyPolicy string         `json:"refactorApplyPolicy"`
 }
 
 // Status reports daemon health (session/status).
@@ -300,6 +361,7 @@ func (s *Session) Status() Status {
 		UptimeSeconds:       time.Since(s.started).Seconds(),
 		ProgramFiles:        len(s.ws.Program.SourceFiles()),
 		OverlayCount:        len(s.overlays),
+		Snapshots:           s.ListSnapshots(),
 		Rebuilds:            s.rebuilds,
 		LastBuildMs:         float64(s.lastBuild) / float64(time.Millisecond),
 		HeapAllocBytes:      mem.HeapAlloc,
@@ -546,6 +608,15 @@ func (srv *Server) dispatch(ctx context.Context, req *Request) (json.RawMessage,
 		}
 	}
 
+	format := cli.FormatJSON
+	if params.Format != "" {
+		parsed, err := cli.ParseFormat(params.Format)
+		if err != nil {
+			return nil, &RPCError{Code: CodeInvalidParams, Message: err.Error()}
+		}
+		format = parsed
+	}
+
 	family, name := req.Method, ""
 	if slash := strings.IndexByte(req.Method, '/'); slash >= 0 {
 		family, name = req.Method[:slash], req.Method[slash+1:]
@@ -590,11 +661,11 @@ func (srv *Server) dispatch(ctx context.Context, req *Request) (json.RawMessage,
 	if err != nil {
 		var data json.RawMessage
 		if !isNilResult(result) {
-			data, _ = marshalResult(result)
+			data, _ = renderResult(result, format, params.Limit, params.Offset)
 		}
 		return nil, errorFromExit(err, data)
 	}
-	raw, err := marshalResult(result)
+	raw, err := renderResult(result, format, params.Limit, params.Offset)
 	if err != nil {
 		return nil, &RPCError{Code: CodeInternal, Message: fmt.Sprintf("marshaling result: %v", err)}
 	}
@@ -640,6 +711,37 @@ func (srv *Server) handleAdmin(method string, raw json.RawMessage) (result any, 
 	case "session/overlays/list":
 		return s.ListOverlays(), false, nil
 
+	case "session/snapshot/save":
+		name, err := snapshotName(method, raw)
+		if err != nil {
+			return nil, false, err
+		}
+		return s.SaveSnapshot(name), false, nil
+
+	case "session/snapshot/restore":
+		name, err := snapshotName(method, raw)
+		if err != nil {
+			return nil, false, err
+		}
+		info, err := s.RestoreSnapshot(name)
+		if err != nil {
+			return nil, false, err
+		}
+		return info, false, nil
+
+	case "session/snapshot/drop":
+		name, err := snapshotName(method, raw)
+		if err != nil {
+			return nil, false, err
+		}
+		if err := s.DropSnapshot(name); err != nil {
+			return nil, false, err
+		}
+		return map[string]any{"dropped": name, "snapshotCount": len(s.snapshots)}, false, nil
+
+	case "session/snapshot/list":
+		return s.ListSnapshots(), false, nil
+
 	case "session/reload":
 		if err := s.Reload(); err != nil {
 			return nil, false, err
@@ -656,6 +758,20 @@ func (srv *Server) handleAdmin(method string, raw json.RawMessage) (result any, 
 	return nil, false, &RPCError{Code: CodeMethodNotFound, Message: fmt.Sprintf("unknown method %q", method)}
 }
 
+// snapshotName extracts the required {name} param of session/snapshot/*.
+func snapshotName(method string, raw json.RawMessage) (string, error) {
+	var p struct {
+		Name string `json:"name"`
+	}
+	if err := unmarshalParams(raw, &p); err != nil {
+		return "", err
+	}
+	if p.Name == "" {
+		return "", cli.UsageErrorf("%s requires params {name}", method)
+	}
+	return p.Name, nil
+}
+
 func unmarshalParams(raw json.RawMessage, into any) error {
 	if len(raw) == 0 {
 		return nil
@@ -670,12 +786,29 @@ func unmarshalParams(raw json.RawMessage, into any) error {
 // CLI uses with --format json (envelope with schemaVersion; Lister windowing
 // with no limit), so RPC results are byte-identical to CLI output.
 func marshalResult(result any) (json.RawMessage, error) {
+	return renderResult(result, cli.FormatJSON, 0, 0)
+}
+
+// renderResult renders a handler result through the CLI output layer in the
+// requested format with --limit/--offset windowing. JSON results are returned
+// as the structured envelope; text/ndjson results are returned as
+// {"rendered": "<exact CLI output bytes>"} so a routing client (--connect)
+// can print them verbatim, byte-identical to a local run.
+func renderResult(result any, format cli.Format, limit int, offset int) (json.RawMessage, error) {
 	var buf bytes.Buffer
-	out := &cli.Output{W: &buf, Format: cli.FormatJSON}
+	out := &cli.Output{W: &buf, Format: format, Limit: limit, Offset: offset}
 	if err := out.Write(result); err != nil {
 		return nil, err
 	}
-	return json.RawMessage(bytes.TrimSpace(buf.Bytes())), nil
+	if format == cli.FormatJSON {
+		return json.RawMessage(bytes.TrimSpace(buf.Bytes())), nil
+	}
+	return json.Marshal(renderedResult{Rendered: buf.String()})
+}
+
+// renderedResult is the result shape for non-JSON server-side rendering.
+type renderedResult struct {
+	Rendered string `json:"rendered"`
 }
 
 // flagValueString renders a JSON flag value in the form flag.FlagSet.Set

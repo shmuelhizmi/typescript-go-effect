@@ -34,6 +34,8 @@ func init() {
 			fs.StringVar(&f.depth, "depth", "all", "outline depth: N, top-level, or all")
 			fs.BoolVar(&f.exportedOnly, "exported-only", false, "only include exported declarations")
 			fs.StringVar(&f.kind, "kind", "", "comma-separated kind filter (class,interface,function,...)")
+			fs.StringVar(&f.detail, "detail", "signatures", "detail level: names (no signatures), signatures, or full (adds the first JSDoc line)")
+			fs.BoolVar(&f.withRefCounts, "with-ref-counts", false, "with --detail full, add approximate reference counts for top-level exported symbols (identifier-occurrence prefilter; expensive)")
 			return f
 		},
 		Run: func(ctx context.Context, ws *core.Workspace, flags any, args []string) (any, error) {
@@ -61,9 +63,18 @@ func init() {
 		Name:         "files",
 		Summary:      "Program file inventory with classification",
 		NeedsProgram: true,
-		Flags:        func(fs *flag.FlagSet) any { return &filesFlags{} },
+		Flags: func(fs *flag.FlagSet) any {
+			f := &filesFlags{}
+			fs.StringVar(&f.why, "why", "", "explain why this file is in the program (root/import chains)")
+			fs.IntVar(&f.maxChains, "max-chains", 3, "with --why, maximum number of import chains to show")
+			return f
+		},
 		Run: func(ctx context.Context, ws *core.Workspace, flags any, args []string) (any, error) {
-			return runMapFiles(ctx, ws, flags.(*filesFlags), args)
+			f := flags.(*filesFlags)
+			if f.why != "" {
+				return runMapFilesWhy(ctx, ws, f, args)
+			}
+			return runMapFiles(ctx, ws, f, args)
 		},
 	})
 	cli.Register(cli.Command{
@@ -127,21 +138,30 @@ func isInNodeModules(fileName string) bool {
 // map outline
 
 type outlineFlags struct {
-	depth        string
-	exportedOnly bool
-	kind         string
+	depth         string
+	exportedOnly  bool
+	kind          string
+	detail        string
+	withRefCounts bool
 }
 
 // OutlineEntry is one node in the symbol tree.
 type OutlineEntry struct {
-	Name      string          `json:"name"`
-	Kind      string          `json:"kind"`
-	SymbolID  string          `json:"symbolId,omitempty"`
-	Exported  bool            `json:"exported,omitempty"`
-	Line      int             `json:"line"`
-	EndLine   int             `json:"endLine"`
-	Signature string          `json:"signature,omitempty"`
-	Children  []*OutlineEntry `json:"children,omitempty"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	SymbolID string `json:"symbolId,omitempty"`
+	Exported bool   `json:"exported,omitempty"`
+	Line     int    `json:"line"`
+	EndLine  int    `json:"endLine"`
+	// Doc is the first line of the leading JSDoc comment (--detail full).
+	Doc       string `json:"doc,omitempty"`
+	Signature string `json:"signature,omitempty"`
+	// ApproxRefs is an approximate project-wide reference count from a cheap
+	// identifier-occurrence prefilter (the declaration itself excluded). Only
+	// computed for top-level exported entries when both --detail full and
+	// --with-ref-counts are given.
+	ApproxRefs *int            `json:"approxRefs,omitempty"`
+	Children   []*OutlineEntry `json:"children,omitempty"`
 }
 
 // FileOutline is the symbol tree of a single file.
@@ -178,7 +198,15 @@ func writeOutlineEntriesText(w io.Writer, entries []*OutlineEntry, depth int) er
 		if e.Signature != "" {
 			signature = "  " + e.Signature
 		}
-		if _, err := fmt.Fprintf(w, "%s%s %s%s%s  (%d-%d)\n", cli.Indent(depth), e.Kind, e.Name, signature, exported, e.Line, e.EndLine); err != nil {
+		refs := ""
+		if e.ApproxRefs != nil {
+			refs = fmt.Sprintf("  ~%d refs", *e.ApproxRefs)
+		}
+		doc := ""
+		if e.Doc != "" {
+			doc = "  // " + e.Doc
+		}
+		if _, err := fmt.Fprintf(w, "%s%s %s%s%s%s  (%d-%d)%s\n", cli.Indent(depth), e.Kind, e.Name, signature, exported, refs, e.Line, e.EndLine, doc); err != nil {
 			return err
 		}
 		if err := writeOutlineEntriesText(w, e.Children, depth+1); err != nil {
@@ -207,6 +235,14 @@ func runMapOutline(ctx context.Context, ws *core.Workspace, flags *outlineFlags,
 	if err != nil {
 		return nil, err
 	}
+	switch flags.detail {
+	case "", "names", "signatures", "full":
+	default:
+		return nil, cli.UsageErrorf("invalid --detail %q (want names, signatures, or full)", flags.detail)
+	}
+	if flags.withRefCounts && flags.detail != "full" {
+		return nil, cli.UsageErrorf("--with-ref-counts requires --detail full")
+	}
 	files, err := projectFiles(ws, args)
 	if err != nil {
 		return nil, err
@@ -224,12 +260,67 @@ func runMapOutline(ctx context.Context, ws *core.Workspace, flags *outlineFlags,
 			maxDepth:     maxDepth,
 			kindFilter:   kindFilter,
 			exportedOnly: flags.exportedOnly,
+			detail:       flags.detail,
 		}
 		entries := walker.entriesForStatements(file.Statements.Nodes, 1)
 		done()
 		result.Files = append(result.Files, &FileOutline{File: ws.RelPath(file.FileName()), Entries: entries})
 	}
+	if flags.detail == "full" && flags.withRefCounts {
+		addApproxRefCounts(ws, result)
+	}
 	return result, nil
+}
+
+// addApproxRefCounts fills ApproxRefs on top-level exported entries using a
+// single identifier-occurrence pass over every project file. The count is the
+// number of identifier tokens with the symbol's name minus one (the
+// declaration itself) — an upper-bound prefilter, not a semantic ref count.
+func addApproxRefCounts(ws *core.Workspace, result *OutlineResult) {
+	names := make(map[string]int)
+	for _, fileOutline := range result.Files {
+		for _, e := range fileOutline.Entries {
+			if e.Exported {
+				names[e.Name] = 0
+			}
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	allFiles, err := projectFiles(ws, nil)
+	if err != nil {
+		return
+	}
+	for _, file := range allFiles {
+		countIdentifierOccurrences(file.AsNode(), names)
+	}
+	for _, fileOutline := range result.Files {
+		for _, e := range fileOutline.Entries {
+			if !e.Exported {
+				continue
+			}
+			count := max(names[e.Name]-1, 0)
+			refs := count
+			e.ApproxRefs = &refs
+		}
+	}
+}
+
+// countIdentifierOccurrences increments counts[name] for every identifier
+// (and shorthand property/JSX name) under root whose text is a counts key.
+func countIdentifierOccurrences(root *ast.Node, counts map[string]int) {
+	var visit func(n *ast.Node) bool
+	visit = func(n *ast.Node) bool {
+		if n.Kind == ast.KindIdentifier {
+			if _, ok := counts[n.Text()]; ok {
+				counts[n.Text()]++
+			}
+		}
+		n.ForEachChild(visit)
+		return false
+	}
+	root.ForEachChild(visit)
 }
 
 type outlineWalker struct {
@@ -239,6 +330,7 @@ type outlineWalker struct {
 	maxDepth     int // 0 = unlimited
 	kindFilter   map[string]bool
 	exportedOnly bool
+	detail       string // names | signatures | full ("" = signatures)
 }
 
 func (w *outlineWalker) entriesForStatements(statements []*ast.Node, depth int) []*OutlineEntry {
@@ -337,14 +429,20 @@ func (w *outlineWalker) newEntry(node *ast.Node, kind string) *OutlineEntry {
 	start := astnav.GetStartOfNode(node, w.file, false /*includeJSDoc*/)
 	line, _ := w.ws.PosToLineCol(w.file, start)
 	endLine, _ := w.ws.PosToLineCol(w.file, node.End())
-	return &OutlineEntry{
-		Name:      name,
-		Kind:      kind,
-		SymbolID:  core.EncodeSymbolID(w.ws, node.Symbol()),
-		Line:      line,
-		EndLine:   endLine,
-		Signature: w.signature(node, kind),
+	e := &OutlineEntry{
+		Name:     name,
+		Kind:     kind,
+		SymbolID: core.EncodeSymbolID(w.ws, node.Symbol()),
+		Line:     line,
+		EndLine:  endLine,
 	}
+	if w.detail != "names" {
+		e.Signature = w.signature(node, kind)
+	}
+	if w.detail == "full" {
+		e.Doc = jsdocFirstLine(node, w.file)
+	}
+	return e
 }
 
 // signature renders a one-line signature: SignatureToString for callables,
@@ -517,7 +615,10 @@ func runMapSearch(ctx context.Context, ws *core.Workspace, flags *searchFlags, a
 // ---------------------------------------------------------------------------
 // map files
 
-type filesFlags struct{}
+type filesFlags struct {
+	why       string
+	maxChains int
+}
 
 // FileInfo is one program file with classification.
 type FileInfo struct {

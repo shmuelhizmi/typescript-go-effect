@@ -12,6 +12,8 @@ import (
 	"github.com/microsoft/typescript-go/internal/tsagent/cli"
 	_ "github.com/microsoft/typescript-go/internal/tsagent/cmds"
 	"github.com/microsoft/typescript-go/internal/tsagent/core"
+	"github.com/microsoft/typescript-go/internal/tsagent/serve"
+	"github.com/microsoft/typescript-go/internal/vfs/osvfs"
 )
 
 func main() {
@@ -24,6 +26,7 @@ type globalFlags struct {
 	raw     bool
 	limit   int
 	offset  int
+	connect string
 }
 
 func registerGlobalFlags(fs *flag.FlagSet) *globalFlags {
@@ -33,7 +36,20 @@ func registerGlobalFlags(fs *flag.FlagSet) *globalFlags {
 	fs.BoolVar(&g.raw, "raw", false, "emit raw JSON instead of the default pretty text output")
 	fs.IntVar(&g.limit, "limit", 0, "maximum number of list items to emit (0 = unlimited)")
 	fs.IntVar(&g.offset, "offset", 0, "number of list items to skip")
+	fs.StringVar(&g.connect, "connect", "never", "route through a running session daemon: never (default), auto (use it if its socket exists), require (fail if unreachable)")
 	return g
+}
+
+// globalFlagNames are not forwarded to the daemon when routing a command
+// (--connect): they configure the client side (project resolution, output
+// format/windowing, routing itself) and travel via dedicated Params fields.
+var globalFlagNames = map[string]bool{
+	"project": true,
+	"format":  true,
+	"raw":     true,
+	"limit":   true,
+	"offset":  true,
+	"connect": true,
 }
 
 func run(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -74,6 +90,22 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return cli.ExitCode(err)
 	}
 
+	// --connect routing: optionally run the command on a live session daemon
+	// instead of building a local program. The serve family always runs
+	// locally (the daemon and its admin clients must not recurse into RPC).
+	switch global.connect {
+	case "", "never":
+	case "auto", "require":
+		if cmd.Family != "serve" {
+			if code, handled := routeViaDaemon(cmd, fs, global, format, positional, stdout, stderr); handled {
+				return code
+			}
+		}
+	default:
+		fmt.Fprintf(stderr, "tsagent: invalid --connect %q (want never, auto, or require)\n", global.connect)
+		return cli.ExitUsage
+	}
+
 	ctx := context.Background()
 	var ws *core.Workspace
 	if cmd.NeedsProgram {
@@ -109,6 +141,81 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return cli.ExitFailed
 	}
 	return cli.ExitOK
+}
+
+// routeViaDaemon attempts to run the command on the project's session daemon
+// (--connect auto|require). handled=false means the caller should run the
+// command locally (auto mode fallback); handled=true means the command was
+// either routed or definitively failed, and code is the process exit code.
+// Output is byte-identical to a local run: text/ndjson is rendered by the
+// daemon through the same output layer; json is the same envelope.
+func routeViaDaemon(cmd cli.Command, fs *flag.FlagSet, global *globalFlags, format cli.Format, args []string, stdout io.Writer, stderr io.Writer) (code int, handled bool) {
+	require := global.connect == "require"
+	socketPath, err := daemonSocketPath(global.project)
+	if err != nil {
+		if require {
+			fmt.Fprintf(stderr, "tsagent: --connect require: %v\n", err)
+			return cli.ExitFailed, true
+		}
+		return 0, false
+	}
+	if !require {
+		// auto: only attempt the daemon when its socket exists.
+		if _, statErr := os.Stat(socketPath); statErr != nil {
+			return 0, false
+		}
+	}
+
+	method := cmd.Family
+	if cmd.Name != "" {
+		method += "/" + cmd.Name
+	}
+	params := serve.Params{
+		Flags:  collectSetFlags(fs),
+		Args:   args,
+		Format: string(format),
+		Limit:  global.limit,
+		Offset: global.offset,
+	}
+	code, err = serve.RouteCommand(socketPath, method, params, stdout, stderr)
+	if err != nil {
+		if require {
+			fmt.Fprintf(stderr, "tsagent: --connect require: %v\n", err)
+			return cli.ExitFailed, true
+		}
+		fmt.Fprintf(stderr, "tsagent: session daemon unreachable (%v); running locally\n", err)
+		return 0, false
+	}
+	return code, true
+}
+
+// daemonSocketPath resolves the project's default daemon socket without
+// building a program (same derivation the daemon itself uses).
+func daemonSocketPath(project string) (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("getting current directory: %w", err)
+	}
+	configPath, err := serve.ResolveConfigPath(osvfs.FS(), cwd, project)
+	if err != nil {
+		return "", err
+	}
+	return serve.DefaultSocketPath(configPath), nil
+}
+
+// collectSetFlags gathers the command-specific flags the user explicitly set
+// (flag.Visit only walks set flags) for forwarding as RPC params; global
+// flags are excluded — they travel via dedicated Params fields or stay
+// client-side.
+func collectSetFlags(fs *flag.FlagSet) map[string]any {
+	flags := map[string]any{}
+	fs.Visit(func(f *flag.Flag) {
+		if globalFlagNames[f.Name] {
+			return
+		}
+		flags[f.Name] = f.Value.String()
+	})
+	return flags
 }
 
 // isNilResult reports whether a handler result is nil, including a typed
@@ -189,5 +296,6 @@ func printHelp(w io.Writer) {
 		fmt.Fprintf(w, "  %-16s %s\n", strings.TrimSpace(cmd.Family+" "+cmd.Name), cmd.Summary)
 	}
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Global flags: --project <tsconfig|dir>, --raw (JSON output), --format json|text|ndjson, --limit N, --offset N")
+	fmt.Fprintln(w, "Global flags: --project <tsconfig|dir>, --raw (JSON output), --format json|text|ndjson, --limit N, --offset N,")
+	fmt.Fprintln(w, "              --connect never|auto|require (route through a running `tsagent serve` daemon)")
 }

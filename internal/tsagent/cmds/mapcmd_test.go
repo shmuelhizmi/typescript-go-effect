@@ -247,3 +247,171 @@ func TestMapStats(t *testing.T) {
 		t.Error("lines should be non-zero")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// map files --why
+
+func whyTestFiles() map[string]any {
+	return map[string]any{
+		// Only src/a.ts is a root: the rest enter the program via imports.
+		"/project/tsconfig.json": `{"compilerOptions": {"strict": true, "target": "esnext"}, "files": ["src/a.ts"]}`,
+		"/project/src/a.ts": `import { b } from "./b";
+export const a = b;
+`,
+		"/project/src/b.ts": `import { c } from "./c";
+export const b = c;
+`,
+		"/project/src/c.ts": `export const c = 1;
+`,
+	}
+}
+
+func TestMapFilesWhyChain(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, whyTestFiles())
+	result, err := runMapFilesWhy(context.Background(), ws, &filesFlags{why: "src/c.ts", maxChains: 3}, nil)
+	if err != nil {
+		t.Fatalf("runMapFilesWhy: %v", err)
+	}
+	if result.Status != "imported" {
+		t.Fatalf("status = %q, want imported (%+v)", result.Status, result)
+	}
+	if len(result.Chains) != 1 {
+		t.Fatalf("expected 1 chain, got %d", len(result.Chains))
+	}
+	steps := result.Chains[0].Steps
+	if len(steps) != 2 {
+		t.Fatalf("expected a 2-hop chain a->b->c, got %d steps: %+v", len(steps), steps)
+	}
+	if steps[0].File != "src/a.ts" || !steps[0].Root || steps[0].Imports != "src/b.ts" {
+		t.Errorf("step 0 = %+v, want root src/a.ts importing src/b.ts", steps[0])
+	}
+	if !strings.Contains(steps[0].Text, `"./b"`) || steps[0].Line != 1 {
+		t.Errorf("step 0 line/text = %d %q, want line 1 with \"./b\"", steps[0].Line, steps[0].Text)
+	}
+	if steps[1].File != "src/b.ts" || steps[1].Imports != "src/c.ts" || !strings.Contains(steps[1].Text, `"./c"`) {
+		t.Errorf("step 1 = %+v, want src/b.ts importing src/c.ts", steps[1])
+	}
+}
+
+func TestMapFilesWhyRootAndLib(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, whyTestFiles())
+	result, err := runMapFilesWhy(context.Background(), ws, &filesFlags{why: "src/a.ts", maxChains: 3}, nil)
+	if err != nil {
+		t.Fatalf("runMapFilesWhy(root): %v", err)
+	}
+	if result.Status != "root" {
+		t.Errorf("status = %q, want root", result.Status)
+	}
+
+	// A lib file reports "lib"/default library.
+	var libFile string
+	for _, f := range ws.Program.SourceFiles() {
+		if ws.Program.IsLibFile(f) {
+			libFile = f.FileName()
+			break
+		}
+	}
+	if libFile == "" {
+		t.Fatal("no lib file in program")
+	}
+	result, err = runMapFilesWhy(context.Background(), ws, &filesFlags{why: libFile, maxChains: 3}, nil)
+	if err != nil {
+		t.Fatalf("runMapFilesWhy(lib): %v", err)
+	}
+	if result.Status != "lib" || !strings.Contains(result.Reason, "library") {
+		t.Errorf("lib result = %+v", result)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// map outline --detail
+
+func outlineDetailFiles() map[string]any {
+	return map[string]any{
+		"/project/src/lib.ts": `/**
+ * Adds two numbers.
+ * Second paragraph that must not appear in the outline.
+ * @param a the left operand
+ */
+export function add(a: number, b: number): number {
+	return a + b;
+}
+
+/** The answer. */
+export const answer = 42;
+`,
+		"/project/src/use.ts": `import { add, answer } from "./lib";
+export const total = add(answer, answer);
+`,
+	}
+}
+
+func TestMapOutlineDetailNames(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, outlineDetailFiles())
+	result, err := runMapOutline(context.Background(), ws, &outlineFlags{depth: "all", detail: "names"}, []string{"src/lib.ts"})
+	if err != nil {
+		t.Fatalf("runMapOutline: %v", err)
+	}
+	lib := findFileOutline(t, result, "src/lib.ts")
+	add := findEntry(lib.Entries, "add")
+	if add == nil {
+		t.Fatal("missing add entry")
+	}
+	if add.Signature != "" {
+		t.Errorf("names detail should drop signatures, got %q", add.Signature)
+	}
+	if add.Doc != "" {
+		t.Errorf("names detail should not include docs, got %q", add.Doc)
+	}
+}
+
+func TestMapOutlineDetailFull(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, outlineDetailFiles())
+	ctx := context.Background()
+
+	// --detail full adds the first JSDoc line; approxRefs only with the flag.
+	result, err := runMapOutline(ctx, ws, &outlineFlags{depth: "all", detail: "full"}, []string{"src/lib.ts"})
+	if err != nil {
+		t.Fatalf("runMapOutline: %v", err)
+	}
+	lib := findFileOutline(t, result, "src/lib.ts")
+	add := findEntry(lib.Entries, "add")
+	if add == nil {
+		t.Fatal("missing add entry")
+	}
+	if add.Doc != "Adds two numbers." {
+		t.Errorf("add doc = %q, want first JSDoc line", add.Doc)
+	}
+	if answer := findEntry(lib.Entries, "answer"); answer == nil || answer.Doc != "The answer." {
+		t.Errorf("answer doc = %+v, want 'The answer.'", answer)
+	}
+	if add.Signature == "" {
+		t.Error("full detail keeps signatures")
+	}
+	if add.ApproxRefs != nil {
+		t.Errorf("approxRefs must not be computed without --with-ref-counts, got %v", *add.ApproxRefs)
+	}
+
+	result, err = runMapOutline(ctx, ws, &outlineFlags{depth: "all", detail: "full", withRefCounts: true}, []string{"src/lib.ts"})
+	if err != nil {
+		t.Fatalf("runMapOutline --with-ref-counts: %v", err)
+	}
+	lib = findFileOutline(t, result, "src/lib.ts")
+	add = findEntry(lib.Entries, "add")
+	if add.ApproxRefs == nil || *add.ApproxRefs != 2 {
+		t.Errorf("add approxRefs = %v, want 2 (import + call)", add.ApproxRefs)
+	}
+	answer := findEntry(lib.Entries, "answer")
+	if answer.ApproxRefs == nil || *answer.ApproxRefs != 3 {
+		t.Errorf("answer approxRefs = %v, want 3 (import + two args)", answer.ApproxRefs)
+	}
+
+	// --with-ref-counts without --detail full is a usage error.
+	if _, err := runMapOutline(ctx, ws, &outlineFlags{depth: "all", withRefCounts: true}, nil); err == nil {
+		t.Error("expected usage error for --with-ref-counts without --detail full")
+	}
+}

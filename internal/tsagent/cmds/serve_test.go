@@ -213,6 +213,210 @@ func TestServeDaemonStdio(t *testing.T) {
 	}
 }
 
+// startTestDaemon launches the serve daemon command on an in-memory FS and
+// returns its socket path; the daemon is stopped at cleanup.
+func startTestDaemon(t *testing.T, files map[string]any) string {
+	t.Helper()
+	if runtime.GOOS == "windows" || runtime.GOOS == "plan9" {
+		t.Skip("unix sockets not available")
+	}
+	fs := newServeTestFS(t, files)
+	socketPath := shortTempSocket(t)
+	stdout := newLineWriter()
+
+	daemonDone := make(chan error, 1)
+	go func() {
+		_, err := runRegistered(t, "serve", "", func(flags any) {
+			f := flags.(*serveDaemonFlags)
+			f.socket = true
+			f.socketPath = socketPath
+			f.fs = fs
+			f.cwd = "/project"
+			f.singleThreaded = true
+			f.stdout = stdout
+			f.stderr = io.Discard
+		}, nil)
+		daemonDone <- err
+	}()
+	select {
+	case announced := <-stdout.lines:
+		if announced != socketPath {
+			t.Fatalf("announced socket path %q, want %q", announced, socketPath)
+		}
+	case err := <-daemonDone:
+		t.Fatalf("daemon exited early: %v", err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("daemon did not announce its socket path")
+	}
+	t.Cleanup(func() {
+		_, _ = runRegistered(t, "serve", "stop", func(flags any) {
+			flags.(*serveClientFlags).socketPath = socketPath
+		}, nil)
+		select {
+		case <-daemonDone:
+		case <-time.After(10 * time.Second):
+			t.Error("daemon did not exit after serve stop")
+		}
+	})
+	return socketPath
+}
+
+// decodeClientResult unmarshals a serve client command result (the unwrapped
+// envelope json.RawMessage) into out.
+func decodeClientResult(t *testing.T, result any, out any) {
+	t.Helper()
+	raw, ok := result.(json.RawMessage)
+	if !ok {
+		t.Fatalf("client result is %T, want json.RawMessage", result)
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		t.Fatalf("unmarshal client result %s: %v", raw, err)
+	}
+}
+
+func TestServeOverlaySnapshotReloadCLI(t *testing.T) {
+	t.Parallel()
+	const valid = "export const n: number = 1;\n"
+	const broken = `export const n: number = "broken";`
+	socketPath := startTestDaemon(t, map[string]any{"/project/src/a.ts": valid})
+	withSocket := func(flags any) {
+		switch f := flags.(type) {
+		case *serveClientFlags:
+			f.socketPath = socketPath
+		case *serveOverlayFlags:
+			f.socketPath = socketPath
+		}
+	}
+
+	// overlay set from stdin.
+	result, err := runRegistered(t, "serve", "overlay", func(flags any) {
+		f := flags.(*serveOverlayFlags)
+		f.socketPath = socketPath
+		f.stdin = strings.NewReader(broken)
+	}, []string{"set", "src/a.ts"})
+	if err != nil {
+		t.Fatalf("overlay set: %v", err)
+	}
+	var setRes map[string]any
+	decodeClientResult(t, result, &setRes)
+	if setRes["file"] != "/project/src/a.ts" || setRes["overlayCount"] != float64(1) {
+		t.Errorf("overlay set result = %v", setRes)
+	}
+
+	// snapshot save the broken state.
+	result, err = runRegistered(t, "serve", "snapshot", withSocket, []string{"save", "exp1"})
+	if err != nil {
+		t.Fatalf("snapshot save: %v", err)
+	}
+	var saveRes map[string]any
+	decodeClientResult(t, result, &saveRes)
+	if saveRes["name"] != "exp1" || saveRes["files"] != float64(1) {
+		t.Errorf("snapshot save result = %v", saveRes)
+	}
+
+	// overlay set from --from file (back to valid content).
+	fromPath := filepath.Join(t.TempDir(), "valid.ts")
+	if err := os.WriteFile(fromPath, []byte(valid), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := runRegistered(t, "serve", "overlay", func(flags any) {
+		f := flags.(*serveOverlayFlags)
+		f.socketPath = socketPath
+		f.from = fromPath
+	}, []string{"set", "src/a.ts"}); err != nil {
+		t.Fatalf("overlay set --from: %v", err)
+	}
+
+	// overlay list shows the valid-content byte count.
+	result, err = runRegistered(t, "serve", "overlay", withSocket, []string{"list"})
+	if err != nil {
+		t.Fatalf("overlay list: %v", err)
+	}
+	var overlays []map[string]any
+	decodeClientResult(t, result, &overlays)
+	if len(overlays) != 1 || overlays[0]["bytes"] != float64(len(valid)) {
+		t.Errorf("overlay list = %v, want 1 entry with %d bytes", overlays, len(valid))
+	}
+
+	// snapshot restore brings the broken overlay back.
+	if _, err := runRegistered(t, "serve", "snapshot", withSocket, []string{"restore", "exp1"}); err != nil {
+		t.Fatalf("snapshot restore: %v", err)
+	}
+	result, err = runRegistered(t, "serve", "overlay", withSocket, []string{"list"})
+	if err != nil {
+		t.Fatalf("overlay list after restore: %v", err)
+	}
+	overlays = nil
+	decodeClientResult(t, result, &overlays)
+	if len(overlays) != 1 || overlays[0]["bytes"] != float64(len(broken)) {
+		t.Errorf("overlay list after restore = %v, want 1 entry with %d bytes", overlays, len(broken))
+	}
+
+	// snapshot list / drop round-trip.
+	result, err = runRegistered(t, "serve", "snapshot", withSocket, []string{"list"})
+	if err != nil {
+		t.Fatalf("snapshot list: %v", err)
+	}
+	var snaps []map[string]any
+	decodeClientResult(t, result, &snaps)
+	if len(snaps) != 1 || snaps[0]["name"] != "exp1" {
+		t.Errorf("snapshot list = %v, want [exp1]", snaps)
+	}
+	if _, err := runRegistered(t, "serve", "snapshot", withSocket, []string{"drop", "exp1"}); err != nil {
+		t.Fatalf("snapshot drop: %v", err)
+	}
+	_, err = runRegistered(t, "serve", "snapshot", withSocket, []string{"restore", "exp1"})
+	if err == nil || cli.ExitCode(err) != cli.ExitNotFound {
+		t.Errorf("restore dropped snapshot: err = %v, want not-found", err)
+	}
+
+	// overlay drop + reload.
+	if _, err := runRegistered(t, "serve", "overlay", withSocket, []string{"drop", "src/a.ts"}); err != nil {
+		t.Fatalf("overlay drop: %v", err)
+	}
+	result, err = runRegistered(t, "serve", "reload", withSocket, nil)
+	if err != nil {
+		t.Fatalf("serve reload: %v", err)
+	}
+	var reload map[string]any
+	decodeClientResult(t, result, &reload)
+	if reload["programFiles"].(float64) < 1 {
+		t.Errorf("reload result = %v", reload)
+	}
+}
+
+func TestServeSnapshotOverlayUsageErrors(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"snapshot", nil},
+		{"snapshot", []string{"save"}},
+		{"snapshot", []string{"bogus", "x"}},
+		{"snapshot", []string{"list", "extra"}},
+		{"overlay", nil},
+		{"overlay", []string{"set"}},
+		{"overlay", []string{"drop"}},
+		{"overlay", []string{"bogus"}},
+	}
+	for _, tc := range cases {
+		_, err := runRegistered(t, "serve", tc.name, func(flags any) {
+			// A bogus socket path ensures usage validation fires before any
+			// connection attempt is relevant.
+			switch f := flags.(type) {
+			case *serveClientFlags:
+				f.socketPath = "/nonexistent.sock"
+			case *serveOverlayFlags:
+				f.socketPath = "/nonexistent.sock"
+			}
+		}, tc.args)
+		if err == nil || cli.ExitCode(err) != cli.ExitUsage {
+			t.Errorf("serve %s %v: err = %v, want usage error", tc.name, tc.args, err)
+		}
+	}
+}
+
 func TestServeFlagValidation(t *testing.T) {
 	t.Parallel()
 	_, err := runRegistered(t, "serve", "", func(flags any) {

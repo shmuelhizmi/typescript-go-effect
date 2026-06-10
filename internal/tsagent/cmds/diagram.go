@@ -202,6 +202,15 @@ type flowGraph struct {
 	Nodes    []*flowNode    `json:"nodes"`
 	Edges    []*flowEdge    `json:"edges"`
 	Clusters []*flowCluster `json:"clusters,omitempty"`
+	// Direction is the mermaid/dot layout direction ("" = LR).
+	Direction string `json:"direction,omitempty"`
+}
+
+func (g *flowGraph) direction() string {
+	if g.Direction == "" {
+		return "LR"
+	}
+	return g.Direction
 }
 
 func renderFlowDiagram(g *flowGraph, syntax string, stats map[string]int) (*DiagramResult, error) {
@@ -223,7 +232,7 @@ func renderFlowDiagram(g *flowGraph, syntax string, stats map[string]int) (*Diag
 
 func (g *flowGraph) emitMermaid() string {
 	var b strings.Builder
-	b.WriteString("flowchart LR\n")
+	fmt.Fprintf(&b, "flowchart %s\n", g.direction())
 	inCluster := make(map[string]bool)
 	for _, c := range g.Clusters {
 		for _, id := range c.Nodes {
@@ -288,7 +297,11 @@ func writeMermaidClasses(b *strings.Builder, nodes []*flowNode) {
 func (g *flowGraph) emitDot() string {
 	var b strings.Builder
 	b.WriteString("digraph G {\n")
-	b.WriteString("  rankdir=LR;\n")
+	rankdir := "LR"
+	if g.direction() == "TD" {
+		rankdir = "TB"
+	}
+	fmt.Fprintf(&b, "  rankdir=%s;\n", rankdir)
 	b.WriteString("  node [shape=box];\n")
 	inCluster := make(map[string]bool)
 	for i, c := range g.Clusters {
