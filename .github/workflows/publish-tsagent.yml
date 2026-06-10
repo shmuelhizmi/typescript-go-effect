@@ -1,0 +1,45 @@
+name: publish tsagent to npm
+
+on:
+  push:
+    tags:
+      - "tsagent-v*"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Verify tag matches package version
+        if: github.ref_type == 'tag'
+        run: |
+          PKG_VERSION=$(node -p "require('./_packages/tsagent/package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#tsagent-v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "package.json version $PKG_VERSION != tag version $TAG_VERSION" >&2
+            exit 1
+          fi
+      - name: Build platform packages
+        run: node _packages/tsagent/scripts/build.mjs
+      - name: Publish platform packages
+        run: |
+          for dir in built/npm/tsagent-*; do
+            (cd "$dir" && npm publish --provenance --access public)
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish main package
+        run: cd built/npm/tsagent && npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
