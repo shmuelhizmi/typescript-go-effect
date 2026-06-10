@@ -13,8 +13,7 @@ state managed by [effect-atom](https://github.com/tim-smart/effect-atom).
 
 ```sh
 npm install
-npm run build:wasm   # hereby tsgo:wasm -> public/wasm/tsgo.wasm (~50MB)
-npm run dev          # builds native tsgo + asset packs, starts Vite
+npm run dev   # builds native tsgo + tsgo.wasm (~50MB) + asset packs, starts Vite
 ```
 
 Then open http://localhost:5173.

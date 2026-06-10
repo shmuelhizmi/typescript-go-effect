@@ -96,13 +96,39 @@ async function boot(initialSource: string): Promise<void> {
 }
 
 async function bootWasm(): Promise<void> {
-    await import(/* @vite-ignore */ new URL("/wasm/wasm_exec.js", self.location.origin).href);
+    const wasmExecUrl = new URL("/wasm/wasm_exec.js", self.location.origin).href;
+    try {
+        await import(/* @vite-ignore */ wasmExecUrl);
+    } catch (error) {
+        throw new Error(
+            `failed to load ${wasmExecUrl} (${error}) — build the wasm artifacts with "npm run build:wasm"`,
+        );
+    }
     const go = new Go();
-    const { instance } = await WebAssembly.instantiateStreaming(fetch("/wasm/tsgo.wasm"), go.importObject);
+    const { instance } = await WebAssembly.instantiateStreaming(
+        fetchOk("/wasm/tsgo.wasm"),
+        go.importObject,
+    );
     void go.run(instance); // resolves only if the Go program exits
     if (typeof globalThis.tsgoWasm !== "object") {
         throw new Error("tsgo.wasm did not register globalThis.tsgoWasm");
     }
+}
+
+/** fetch() with the failing URL (and remedy) baked into the error message. */
+async function fetchOk(url: string): Promise<Response> {
+    let response: Response;
+    try {
+        response = await fetch(url);
+    } catch (error) {
+        throw new Error(`failed to fetch ${url}: ${error}`);
+    }
+    if (!response.ok) {
+        throw new Error(
+            `failed to fetch ${url}: HTTP ${response.status} — run "npm run build:wasm" and "npm run prepare:assets" (npm run dev does both)`,
+        );
+    }
+    return response;
 }
 
 interface TypesPack {
@@ -111,8 +137,7 @@ interface TypesPack {
 }
 
 async function fetchTypesPack(): Promise<TypesPack> {
-    const response = await fetch("/types-pack.bin.gz");
-    if (!response.ok) throw new Error(`types pack fetch failed: ${response.status}`);
+    const response = await fetchOk("/types-pack.bin.gz");
     const stream = response.body!.pipeThrough(new DecompressionStream("gzip"));
     const raw = new Uint8Array(await new Response(stream).arrayBuffer());
     const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
