@@ -2,7 +2,10 @@ package cmds
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -70,6 +73,148 @@ func refactorModuleSpecifierText(ws *core.Workspace, fromFile string, toFile str
 	})
 	rel = tspath.RemoveFileExtension(rel)
 	return tspath.EnsurePathIsNonModuleName(rel)
+}
+
+// refactorDestPackage describes the npm/workspace package containing a move
+// destination, for retargeting consumers whose original specifier was a bare
+// package specifier (e.g. `@scope/pkg/sub`): the package directory, its
+// package.json name, and the package-style specifier (name + exports subpath)
+// that maps to the destination file ("" when no exports subpath — or, absent
+// an exports field, no main/module field — maps to it).
+type refactorDestPackage struct {
+	dir  string
+	name string
+	spec string
+}
+
+// refactorFindDestPackage walks up from destAbs to the nearest package.json
+// with a "name" field and derives the package specifier for destAbs from its
+// "exports" value (string targets, conditional objects on the common
+// condition keys default/import/require/types/bun, and single-`*` wildcard
+// patterns on subpath and target), or from "main"/"module" when there is no
+// exports field. ok=false when no named package.json sits above destAbs.
+func refactorFindDestPackage(ws *core.Workspace, destAbs string) (refactorDestPackage, bool) {
+	for dir := tspath.GetDirectoryPath(destAbs); ; {
+		content, found := ws.FS.ReadFile(tspath.CombinePaths(dir, "package.json"))
+		if found {
+			var pkg struct {
+				Name    string `json:"name"`
+				Exports any    `json:"exports"`
+				Main    string `json:"main"`
+				Module  string `json:"module"`
+			}
+			if json.Unmarshal([]byte(content), &pkg) == nil && pkg.Name != "" {
+				rel := tspath.GetRelativePathFromDirectory(dir, destAbs, tspath.ComparePathsOptions{
+					CurrentDirectory:          ws.RootDir,
+					UseCaseSensitiveFileNames: ws.FS.UseCaseSensitiveFileNames(),
+				})
+				info := refactorDestPackage{dir: dir, name: pkg.Name}
+				if subpath, ok := refactorExportsSubpath(pkg.Exports, rel); ok {
+					info.spec = pkg.Name + strings.TrimPrefix(subpath, ".")
+				} else if pkg.Exports == nil &&
+					(refactorPkgRelPathEq(pkg.Main, rel) || refactorPkgRelPathEq(pkg.Module, rel)) {
+					info.spec = pkg.Name // main/module map the dest: the "." case
+				}
+				return info, true
+			}
+		}
+		parent := tspath.GetDirectoryPath(dir)
+		if parent == dir {
+			return refactorDestPackage{}, false
+		}
+		dir = parent
+	}
+}
+
+// refactorExportsSubpath scans a decoded package.json "exports" value for the
+// subpath whose target maps to relDest (the destination file relative to the
+// package directory). A plain string exports value is the "." subpath; an
+// object with no "."-prefixed key is a conditions object for ".". Exact
+// subpaths win over single-`*` wildcard patterns; ties break lexically for
+// determinism. ok=false when nothing maps.
+func refactorExportsSubpath(exports any, relDest string) (string, bool) {
+	relDest = strings.TrimPrefix(tspath.NormalizeSlashes(relDest), "./")
+	switch ex := exports.(type) {
+	case string, []any:
+		if _, starred, ok := refactorExportTargetMatches(ex, relDest); ok && !starred {
+			return ".", true
+		}
+	case map[string]any:
+		subpathMap := false
+		for key := range ex {
+			if strings.HasPrefix(key, ".") {
+				subpathMap = true
+				break
+			}
+		}
+		if !subpathMap {
+			// Conditions object for the "." subpath.
+			if _, starred, ok := refactorExportTargetMatches(ex, relDest); ok && !starred {
+				return ".", true
+			}
+			return "", false
+		}
+		keys := slices.Sorted(maps.Keys(ex))
+		for _, wild := range []bool{false, true} { // exact subpaths first
+			for _, key := range keys {
+				stars := strings.Count(key, "*")
+				if !strings.HasPrefix(key, ".") || stars > 1 || (stars == 1) != wild {
+					continue
+				}
+				star, starred, ok := refactorExportTargetMatches(ex[key], relDest)
+				if !ok || starred != wild {
+					continue // a starred target needs a starred subpath to substitute into (and vice versa)
+				}
+				if wild {
+					return strings.Replace(key, "*", star, 1), true
+				}
+				return key, true
+			}
+		}
+	}
+	return "", false
+}
+
+// refactorExportTargetMatches matches one exports target value against
+// relDest: a string (exact, or a single-`*` prefix/suffix pattern whose
+// captured middle is returned with starred=true), an array of fallbacks, or
+// a conditional object (any of the condition keys
+// default/import/require/types/bun counts; nested conditions recurse).
+func refactorExportTargetMatches(target any, relDest string) (star string, starred bool, ok bool) {
+	switch t := target.(type) {
+	case string:
+		t = strings.TrimPrefix(tspath.NormalizeSlashes(t), "./")
+		if strings.Count(t, "*") == 1 {
+			i := strings.Index(t, "*")
+			prefix, suffix := t[:i], t[i+1:]
+			if len(relDest) >= len(prefix)+len(suffix) && strings.HasPrefix(relDest, prefix) && strings.HasSuffix(relDest, suffix) {
+				return relDest[len(prefix) : len(relDest)-len(suffix)], true, true
+			}
+		} else if !strings.Contains(t, "*") && t == relDest {
+			return "", false, true
+		}
+	case []any:
+		for _, el := range t {
+			if star, starred, ok = refactorExportTargetMatches(el, relDest); ok {
+				return star, starred, true
+			}
+		}
+	case map[string]any:
+		for _, cond := range []string{"default", "import", "require", "types", "bun"} {
+			if sub, present := t[cond]; present {
+				if star, starred, ok = refactorExportTargetMatches(sub, relDest); ok {
+					return star, starred, true
+				}
+			}
+		}
+	}
+	return "", false, false
+}
+
+// refactorPkgRelPathEq reports whether a package.json path field (main/module)
+// names relDest (both package-directory-relative).
+func refactorPkgRelPathEq(field string, relDest string) bool {
+	return field != "" && strings.TrimPrefix(tspath.NormalizeSlashes(field), "./") == strings.TrimPrefix(tspath.NormalizeSlashes(relDest), "./")
 }
 
 // refactorImportsResolvingTo returns the import declarations in file whose

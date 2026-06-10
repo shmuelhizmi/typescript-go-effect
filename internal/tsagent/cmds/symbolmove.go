@@ -12,6 +12,7 @@ import (
 	"github.com/microsoft/typescript-go/internal/scanner"
 	"github.com/microsoft/typescript-go/internal/tsagent/cli"
 	"github.com/microsoft/typescript-go/internal/tsagent/core"
+	"github.com/microsoft/typescript-go/internal/tspath"
 )
 
 // symbolmove.go is the factored cross-file symbol-move planner shared by
@@ -315,8 +316,29 @@ func planSymbolMove(ctx context.Context, ws *core.Workspace, declNode *ast.Node,
 	// import, add an import from the new file; retarget `export { X } from`
 	// re-export clauses. Consumers that reach the symbol through a rewritten
 	// named re-export (a barrel) need no change.
-	newSpecRel := func(importer *ast.SourceFile) string {
-		return refactorModuleSpecifierText(ws, importer.FileName(), dest.fileAbs)
+	//
+	// Consumers whose ORIGINAL specifier was a bare package specifier (e.g.
+	// `@scope/pkg/sub` via a package.json exports subpath) must not be handed
+	// a deep relative path that escapes their own workspace package: when the
+	// destination package's exports (or main/module) map a subpath to the
+	// destination file, that package specifier is used instead — only for
+	// consumers OUTSIDE the destination package (inside it, relative
+	// specifiers stay correct and conventional). When no subpath maps, the
+	// relative fallback is taken and noted. Relative originals keep the
+	// relative computation.
+	destPkg, destPkgFound := refactorFindDestPackage(ws, dest.fileAbs)
+	pathOpts := tspath.ComparePathsOptions{CurrentDirectory: ws.RootDir, UseCaseSensitiveFileNames: ws.FS.UseCaseSensitiveFileNames()}
+	crossesPkgBoundary := false
+	newSpecFor := func(importer *ast.SourceFile, origSpec string) (spec string, fellBack bool) {
+		rel := refactorModuleSpecifierText(ws, importer.FileName(), dest.fileAbs)
+		if origSpec == "" || tspath.IsExternalModuleNameRelative(origSpec) || !destPkgFound ||
+			tspath.ContainsPath(destPkg.dir, importer.FileName(), pathOpts) {
+			return rel, false
+		}
+		if destPkg.spec != "" {
+			return destPkg.spec, false
+		}
+		return rel, true
 	}
 	for refFile, refNodes := range refFiles {
 		if refFile == dest.file {
@@ -325,12 +347,16 @@ func planSymbolMove(ctx context.Context, ws *core.Workspace, declNode *ast.Node,
 		var edits []icore.TextChange
 		localName := symbolName
 		foundImport := false
+		origImportSpec := "" // module specifier text of the first rewritten import
 		origTypeOnly := true // all removed specifiers were type-only
 		removedDecls := make(map[*ast.Node]bool)
 		for _, importDecl := range refactorImportsResolvingTo(ws, refFile, sourceFile.FileName()) {
 			for _, spec := range refactorNamedImportSpecifiers(importDecl) {
 				if refactorImportedName(spec) != symbolName {
 					continue
+				}
+				if !foundImport {
+					origImportSpec = importDecl.AsImportDeclaration().ModuleSpecifier.Text()
 				}
 				foundImport = true
 				localName = spec.Name().Text()
@@ -343,11 +369,13 @@ func planSymbolMove(ctx context.Context, ws *core.Workspace, declNode *ast.Node,
 		}
 		foundReexport := false
 		for _, exportDecl := range refactorReexportsResolvingTo(ws, refFile, sourceFile.FileName()) {
-			reexportEdits, ok := refactorRewriteReexportEdits(refFile, exportDecl, symbolName, newSpecRel(refFile))
+			newSpec, fellBack := newSpecFor(refFile, exportDecl.AsExportDeclaration().ModuleSpecifier.Text())
+			reexportEdits, ok := refactorRewriteReexportEdits(refFile, exportDecl, symbolName, newSpec)
 			if !ok {
 				continue
 			}
 			foundReexport = true
+			crossesPkgBoundary = crossesPkgBoundary || fellBack
 			edits = append(edits, reexportEdits...)
 		}
 		if !foundImport && !foundReexport {
@@ -379,14 +407,20 @@ func planSymbolMove(ctx context.Context, ws *core.Workspace, declNode *ast.Node,
 				ws.RelPath(refFile.FileName()), symbolName)
 		}
 		if foundImport {
+			newSpec, fellBack := newSpecFor(refFile, origImportSpec)
+			crossesPkgBoundary = crossesPkgBoundary || fellBack
 			name := []refactorImportName{{name: symbolName, local: localName, typeOnly: movedTypeOnly || origTypeOnly}}
-			merge, stmt := refactorPlanImports(ws, refFile, dest.fileAbs, newSpecRel(refFile), name, removedDecls)
+			merge, stmt := refactorPlanImports(ws, refFile, dest.fileAbs, newSpec, name, removedDecls)
 			edits = append(edits, merge...)
 			if stmt != "" {
 				edits = append(edits, refactorPrependImports(refFile, stmt))
 			}
 		}
 		es.Edits = append(es.Edits, core.FileEdit{FileName: refFile.FileName(), Edits: edits})
+	}
+	if crossesPkgBoundary {
+		notes = append(notes, fmt.Sprintf("rewrote %q consumers with a relative path that crosses the package boundary of %s (no exports subpath maps to %s)",
+			symbolName, destPkg.name, ws.RelPath(dest.fileAbs)))
 	}
 
 	return notes, nil
