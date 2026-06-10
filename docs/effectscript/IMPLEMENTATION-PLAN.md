@@ -21,8 +21,9 @@ Known v0 deviations / issues (tracked for the native-checking phase):
    (no local `f` binding), unlike TRANSPILATION §1.1's two-statement form.
 2. Or-patterns on object-pattern *fields* (`{ status: 301 | 302 }`) test only
    the first alternative (top-level arm or-patterns work fully).
-3. Declaration emit can elide the synthesized `effect` import even when the
-   emitted `.d.ts` references `Effect.Effect` from the type sugar.
+3. ~~Declaration emit elides the synthesized import~~ — fixed; `.d.ts` output
+   retains the import and prints inferred `Effect.Effect<A, E, R>` types
+   (synthesized-name fallback in `DeclarationNameToString`).
 4. A non-import local binding named like a needed helper (`Fiber`, …)
    collides with the synthesized import (redeclaration error) instead of
    aliasing.

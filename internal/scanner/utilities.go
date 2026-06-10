@@ -83,6 +83,11 @@ func GetTextOfNode(node *ast.Node) string {
 
 func DeclarationNameToString(name *ast.Node) string {
 	if name == nil || name.Pos() == name.End() {
+		// Synthesized names (e.g. EffectScript lowering helpers) have no
+		// source width but do carry text.
+		if name != nil && (ast.IsIdentifier(name) || ast.IsPrivateIdentifier(name) || ast.IsStringLiteral(name)) && name.Text() != "" {
+			return name.Text()
+		}
 		return "(Missing)"
 	}
 	return GetTextOfNode(name)
