@@ -13,33 +13,8 @@ import (
 //
 // The method form's per-stage guard keeps RxJS-style `.pipe` chains intact.
 func (r *rewriter) tryPipeChain(node *ast.Node) (string, bool) {
-	var head *ast.Node
-	var stages []*ast.Node
-
-	if call, ok := pipeMethodCall(node); ok {
-		if len(call.Arguments.Nodes) == 0 {
-			return "", false
-		}
-		for _, arg := range call.Arguments.Nodes {
-			if !r.rootedAtHelper(arg) {
-				return "", false
-			}
-		}
-		head = call.Expression.AsPropertyAccessExpression().Expression
-		stages = call.Arguments.Nodes
-	} else if r.helpers["pipe"] && node.Kind == ast.KindCallExpression {
-		call := node.AsCallExpression()
-		if call.QuestionDotToken != nil || call.TypeArguments != nil ||
-			call.Expression.Kind != ast.KindIdentifier || call.Expression.Text() != "pipe" ||
-			len(call.Arguments.Nodes) < 2 {
-			return "", false
-		}
-		head = call.Arguments.Nodes[0]
-		stages = call.Arguments.Nodes[1:]
-	} else {
-		return "", false
-	}
-	if hasSpread(append([]*ast.Node{head}, stages...)) {
+	head, stages, ok := r.pipeChainParts(node)
+	if !ok {
 		return "", false
 	}
 
@@ -55,6 +30,43 @@ func (r *rewriter) tryPipeChain(node *ast.Node) (string, bool) {
 	}
 	r.stats.count("pipeline")
 	return out, true
+}
+
+// pipeChainParts reports whether tryPipeChain will rewrite this node into a
+// |> chain, returning the head operand and stages. Consumers that emit the
+// node at unary-operand precedence (fork/join/raise expressions) use this to
+// know the emission's top-level operator is the low-precedence |>.
+func (r *rewriter) pipeChainParts(node *ast.Node) (head *ast.Node, stages []*ast.Node, ok bool) {
+	if !r.convertPipes {
+		return nil, nil, false
+	}
+	if call, isMethod := pipeMethodCall(node); isMethod {
+		if len(call.Arguments.Nodes) == 0 {
+			return nil, nil, false
+		}
+		for _, arg := range call.Arguments.Nodes {
+			if !r.rootedAtHelper(arg) {
+				return nil, nil, false
+			}
+		}
+		head = call.Expression.AsPropertyAccessExpression().Expression
+		stages = call.Arguments.Nodes
+	} else if r.helpers["pipe"] && node.Kind == ast.KindCallExpression {
+		call := node.AsCallExpression()
+		if call.QuestionDotToken != nil || call.TypeArguments != nil ||
+			call.Expression.Kind != ast.KindIdentifier || call.Expression.Text() != "pipe" ||
+			len(call.Arguments.Nodes) < 2 {
+			return nil, nil, false
+		}
+		head = call.Arguments.Nodes[0]
+		stages = call.Arguments.Nodes[1:]
+	} else {
+		return nil, nil, false
+	}
+	if hasSpread(append([]*ast.Node{head}, stages...)) {
+		return nil, nil, false
+	}
+	return head, stages, true
 }
 
 // rootedAtHelper reports whether an expression is a call/property chain whose

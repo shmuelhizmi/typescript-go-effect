@@ -36,7 +36,9 @@ func TestEffectifyCorpus(t *testing.T) {
 			src, err := os.ReadFile(filepath.Join(dir, name))
 			assert.NilError(t, err)
 
-			result := Effectify("/"+name, string(src), Options{})
+			// The corpus documents the full rewrite surface, so the optional
+			// pipe → |> conversion is enabled here (off by default in the CLI).
+			result := Effectify("/"+name, string(src), Options{ConvertPipes: true})
 			assert.Equal(t, result.SkipReason, "", "skip detail: %s", result.Detail)
 			assert.Assert(t, result.Converted, "expected at least one conversion")
 
@@ -136,6 +138,27 @@ func TestEffectifySkips(t *testing.T) {
 			assert.Assert(t, !result.Converted)
 		})
 	}
+}
+
+// TestEffectifyPipesOffByDefault pins the default: pipe chains stay verbatim
+// unless Options.ConvertPipes is set, because the |> desugaring to nested
+// calls can weaken type inference for lambda stages.
+func TestEffectifyPipesOffByDefault(t *testing.T) {
+	t.Parallel()
+	src := `import { Effect, pipe } from "effect";
+declare const ea: Effect.Effect<number>;
+export const a = pipe(ea, Effect.map((n) => n + 1));
+export const b = ea.pipe(Effect.map((n) => n + 1));
+`
+	result := Effectify("/case.ts", src, Options{})
+	assert.Equal(t, result.SkipReason, "")
+	assert.Equal(t, result.Output, src)
+	assert.Assert(t, !result.Converted)
+
+	withPipes := Effectify("/case.ts", src, Options{ConvertPipes: true})
+	assert.Equal(t, withPipes.SkipReason, "")
+	assert.Assert(t, strings.Contains(withPipes.Output, "ea |> Effect.map((n) => n + 1)"),
+		"expected |> chains:\n%s", withPipes.Output)
 }
 
 // TestEffectifyLeavesHazardsVerbatim checks per-generator bails: a generator

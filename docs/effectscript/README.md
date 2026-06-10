@@ -121,8 +121,20 @@ It inverts the rules in [TRANSPILATION.md](./TRANSPILATION.md):
 becomes `<-` binds, `Effect.fail` becomes `raise`, `Context.Tag` classes become
 `service`, `Layer.effect/scoped/succeed` become `layer` declarations,
 catch/`Match` pipe chains become postfix `catch` arms and `match` expressions,
-`pipe(a, f)` becomes `a |> f`, and `Effect.Effect<A, E, R>` annotations become
-`A raises E requires R` where they read well.
+and `Effect.Effect<A, E, R>` annotations become `A raises E requires R` where
+they read well.
+
+Rewriting `pipe(a, f)` / `a.pipe(f)` chains into `a |> f` is opt-in via
+`--pipes`: the `|>` operator desugars to nested calls (`f(a)`), which loses
+the left-to-right type inference that effect's `pipe()` overloads provide —
+lambda stages such as `Arr.findFirst((x) => …)` only infer their parameter
+type from the piped-in value in the `pipe()` form, so the rewrite can turn a
+cleanly-checking file into one full of implicit-`unknown` errors.
+
+`--write` renames files but does not touch references to them: import
+specifiers written with an explicit `.ts` extension, `package.json`
+`exports`/`main` entries and tsconfig `include` globs that name the migrated
+files must be updated separately.
 
 The migration is conservative by construction: EffectScript is a strict
 superset of TypeScript, so any shape the tool does not confidently recognize is

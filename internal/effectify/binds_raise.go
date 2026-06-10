@@ -50,6 +50,13 @@ func (r *rewriter) tryBindStatement(node *ast.Node) (string, bool) {
 	if name.Kind == ast.KindIdentifier && effectKeywordIdents[name.Text()] {
 		return "", false
 	}
+	// In `x: T <- e` the forward parser parses T with parseType, where a
+	// trailing type reference treats the following `<` as a type-argument
+	// list (`T<-1>` is legal). A type whose rightmost token is an identifier
+	// therefore swallows the bind arrow — keep those statements verbatim.
+	if vd.Type != nil && typeEndsWithIdentifier(vd.Type) {
+		return "", false
+	}
 
 	var b strings.Builder
 	b.WriteString(r.emit(name))
@@ -64,6 +71,23 @@ func (r *rewriter) tryBindStatement(node *ast.Node) (string, bool) {
 	return b.String(), true
 }
 
+// typeEndsWithIdentifier reports whether the rightmost leaf of a type node is
+// an identifier — the position where a following `<` re-parses as the start
+// of a type-argument list.
+func typeEndsWithIdentifier(node *ast.Node) bool {
+	for {
+		var last *ast.Node
+		node.ForEachChild(func(child *ast.Node) bool {
+			last = child
+			return false
+		})
+		if last == nil {
+			return node.Kind == ast.KindIdentifier
+		}
+		node = last
+	}
+}
+
 // tryDiscardBind matches pattern #7 (inside effect bodies):
 //
 //	yield* e;  →  <- e';
@@ -72,8 +96,14 @@ func (r *rewriter) tryDiscardBind(node *ast.Node) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	// `<- e;` starts with '<' — same ASI fusion hazard as destructuring.
-	if !r.prevStatementTerminated(node) {
+	// `<- e;` starts with '<', which is hazardous after more than just
+	// unterminated statements: the forward parser re-scans any balanced
+	// `{...}` block at statement position followed by `<-` as a destructuring
+	// bind pattern (`if (c) { return; }` + `<- e;` fuses into
+	// `{ return; } <- e`), and an unterminated expression statement absorbs
+	// `<` as a relational operator. Only a `;`-terminated previous sibling is
+	// immune to both.
+	if !r.prevStatementEndsWithSemicolon(node) {
 		return "", false
 	}
 	r.stats.count("discard-bind")
@@ -104,7 +134,7 @@ func (r *rewriter) tryBareYieldStarExpression(node *ast.Node) (string, bool) {
 	}
 	if keyword, raiseOperand, isRaise := r.raiseCallOf(operand); isRaise {
 		text := r.emit(raiseOperand)
-		if !unarySafe(raiseOperand) {
+		if !r.unarySafeEmit(raiseOperand) {
 			text = "(" + text + ")"
 		}
 		r.stats.count("raise-expression")
@@ -171,7 +201,7 @@ func (r *rewriter) tryRaiseExpression(node *ast.Node) (string, bool) {
 		return "", false
 	}
 	text := r.emit(operand)
-	if !unarySafe(operand) {
+	if !r.unarySafeEmit(operand) {
 		text = "(" + text + ")"
 	}
 	r.stats.count("raise-expression")

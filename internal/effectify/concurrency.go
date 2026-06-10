@@ -90,12 +90,26 @@ func (r *rewriter) unaryOperandText(arg *ast.Node) string {
 	if text != "" {
 		c := text[0]
 		if c == '(' || c == '_' || c == '$' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
-			if unarySafe(arg) {
+			if r.unarySafeEmit(arg) {
 				return text
 			}
 		}
 	}
 	return "(" + text + ")"
+}
+
+// unarySafeEmit reports whether the EMITTED text of arg can stand as a
+// unary-precedence operand. unarySafe judges the original node, but a node
+// rewritten into a |> chain has the low-precedence pipeline operator at its
+// top level regardless of its original kind.
+func (r *rewriter) unarySafeEmit(arg *ast.Node) bool {
+	if !unarySafe(arg) {
+		return false
+	}
+	if _, _, isChain := r.pipeChainParts(arg); isChain {
+		return false
+	}
+	return true
 }
 
 // isMemberOrCalleeBase reports whether node is the base of a member access or

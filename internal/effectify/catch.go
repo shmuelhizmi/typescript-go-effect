@@ -120,6 +120,12 @@ func (r *rewriter) matchCatchArm(node *ast.Node) (catchArm, bool) {
 	if !ok {
 		return catchArm{}, false
 	}
+	for _, tag := range tags {
+		// `_` as a catch-arm pattern means catch-all, not a tag.
+		if tag == "_" {
+			return catchArm{}, false
+		}
+	}
 	binding, body, ok := r.catchHandler(handler)
 	if !ok {
 		return catchArm{}, false

@@ -21,6 +21,9 @@ Options:
   --write                 apply changes: write <file>.ets and remove <file>.ts
   --check                 print only the summary; exit 1 if anything would convert
   --full                  print the full proposed file contents instead of a diff
+  --pipes                 also rewrite pipe(a, f) / a.pipe(f) chains into |>
+                          (off by default: |> desugars to nested calls, which
+                          can weaken type inference for lambda stages)
   --import-source <name>  effect import source to look for (default "effect")
 `
 
@@ -29,6 +32,7 @@ func runEffectify(args []string) int {
 	write := false
 	check := false
 	full := false
+	pipes := false
 	importSource := "effect"
 
 	for i := 0; i < len(args); i++ {
@@ -39,6 +43,8 @@ func runEffectify(args []string) int {
 			check = true
 		case "--full":
 			full = true
+		case "--pipes":
+			pipes = true
 		case "--import-source":
 			i++
 			if i >= len(args) {
@@ -84,7 +90,7 @@ func runEffectify(args []string) int {
 			skipped = append(skipped, [2]string{file, "unreadable"})
 			continue
 		}
-		result := effectify.Effectify(file, src, effectify.Options{ImportSource: importSource})
+		result := effectify.Effectify(file, src, effectify.Options{ImportSource: importSource, ConvertPipes: pipes})
 		switch {
 		case result.Converted:
 			converted++

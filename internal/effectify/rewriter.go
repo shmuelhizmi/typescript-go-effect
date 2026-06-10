@@ -20,6 +20,9 @@ type rewriter struct {
 	// converted into an effect body; the statement-level patterns (binds,
 	// raise, defer, …) only fire there, mirroring the forward parser.
 	inEffectBody bool
+	// convertPipes enables the pipe(a, f) / a.pipe(f) → |> rewrite
+	// (Options.ConvertPipes).
+	convertPipes bool
 	stats        FileStats
 }
 
@@ -322,9 +325,27 @@ func unarySafe(node *ast.Node) bool {
 // unterminated previous statement under ASI. True when the statement is first
 // in its list or the previous sibling's text ends with ';', '}' or '{'.
 func (r *rewriter) prevStatementTerminated(stmt *ast.Node) bool {
+	last, ok := r.prevStatementLastChar(stmt)
+	return ok && (last == 0 || last == ';' || last == '}' || last == '{')
+}
+
+// prevStatementEndsWithSemicolon is the stricter variant for statements whose
+// replacement starts with `<-`: the forward parser re-scans a balanced block
+// at statement position followed by `<-` as a destructuring bind pattern, so
+// a previous sibling ending in '}' is NOT safe — only ';' (or being first in
+// the list) is.
+func (r *rewriter) prevStatementEndsWithSemicolon(stmt *ast.Node) bool {
+	last, ok := r.prevStatementLastChar(stmt)
+	return ok && (last == 0 || last == ';')
+}
+
+// prevStatementLastChar returns the last non-whitespace character of the
+// previous sibling statement's text, 0 when the statement is first in its
+// list, and ok=false when the parent has no statement list.
+func (r *rewriter) prevStatementLastChar(stmt *ast.Node) (byte, bool) {
 	stmts := statementListOf(stmt.Parent)
 	if stmts == nil {
-		return false
+		return 0, false
 	}
 	var prev *ast.Node
 	for _, s := range stmts {
@@ -334,17 +355,13 @@ func (r *rewriter) prevStatementTerminated(stmt *ast.Node) bool {
 		prev = s
 	}
 	if prev == nil {
-		return true
+		return 0, true
 	}
 	t := strings.TrimRight(r.text(prev), " \t\r\n")
 	if t == "" {
-		return false
+		return 0, false
 	}
-	switch t[len(t)-1] {
-	case ';', '}', '{':
-		return true
-	}
-	return false
+	return t[len(t)-1], true
 }
 
 func statementListOf(parent *ast.Node) []*ast.Node {

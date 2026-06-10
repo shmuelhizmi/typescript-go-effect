@@ -94,7 +94,7 @@ func (r *rewriter) matchArmParts(node *ast.Node, effectful bool) (pattern string
 	if helper, method, args, isCall := r.helperCall(node); isCall && helper == "Match" {
 		switch method {
 		case "tag":
-			if len(args) != 2 || args[0].Kind != ast.KindStringLiteral || !isValidIdentifier(args[0].Text()) {
+			if len(args) != 2 || args[0].Kind != ast.KindStringLiteral || !isEtsMatchTagName(args[0].Text()) {
 				return "", "", "", false, false
 			}
 			binding, body, ok = r.matchHandlerParts(args[1], effectful)
@@ -138,8 +138,21 @@ func (r *rewriter) matchArmParts(node *ast.Node, effectful bool) (pattern string
 	if !ok {
 		return "", "", "", false, false
 	}
+	for _, tag := range tags {
+		if !isEtsMatchTagName(tag) {
+			return "", "", "", false, false
+		}
+	}
 	binding, body, ok = r.matchHandlerParts(handler, effectful)
 	return strings.Join(tags, " | "), binding, body, false, ok
+}
+
+// isEtsMatchTagName reports whether a tag string can appear as a match-arm
+// pattern. The forward parser classifies identifier patterns by their first
+// character — ASCII uppercase is a tag, anything else is a binding (i.e. a
+// catch-all arm) — so lowercase tag names are inexpressible in match syntax.
+func isEtsMatchTagName(name string) bool {
+	return isValidIdentifier(name) && name[0] >= 'A' && name[0] <= 'Z'
 }
 
 // matchHandlerParts extracts the binding name and rendered body of a match

@@ -1522,6 +1522,28 @@ func (r *resolutionState) tryAddingExtensions(extensionless string, extensions e
 			}
 		}
 		return continueSearching()
+	case tspath.ExtensionEts, tspath.ExtensionEtsx:
+		// Explicit EffectScript extension in the specifier (./foo.ets); like
+		// the .ts case this counts as resolvedUsingTsExtension so the checker
+		// can gate it on allowImportingTsExtensions.
+		if extensions&extensionsTypeScript != 0 {
+			if originalExtension == tspath.ExtensionEtsx {
+				if resolved := r.tryExtension(tspath.ExtensionEtsx, extensionless, true); !resolved.shouldContinueSearching() {
+					return resolved
+				}
+				if resolved := r.tryExtension(tspath.ExtensionEts, extensionless, true); !resolved.shouldContinueSearching() {
+					return resolved
+				}
+			} else {
+				if resolved := r.tryExtension(tspath.ExtensionEts, extensionless, true); !resolved.shouldContinueSearching() {
+					return resolved
+				}
+				if resolved := r.tryExtension(tspath.ExtensionEtsx, extensionless, true); !resolved.shouldContinueSearching() {
+					return resolved
+				}
+			}
+		}
+		return continueSearching()
 	case tspath.ExtensionTs, tspath.ExtensionDts, tspath.ExtensionJs, "":
 		if extensions&extensionsTypeScript != 0 {
 			if resolved := r.tryExtension(tspath.ExtensionTs, extensionless, originalExtension == tspath.ExtensionTs || originalExtension == tspath.ExtensionDts); !resolved.shouldContinueSearching() {

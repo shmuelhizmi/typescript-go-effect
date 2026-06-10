@@ -25,6 +25,13 @@ type Options struct {
 	// ImportSource is the module specifier of the effect library
 	// (compilerOptions.effectImportSource); defaults to "effect".
 	ImportSource string
+	// ConvertPipes rewrites pipe(a, f) / a.pipe(f) chains into |> pipelines.
+	// Off by default: |> desugars to nested calls (g(f(a))), which loses the
+	// left-to-right type inference that effect's pipe() overloads provide —
+	// lambda stages like Arr.findFirst((x) => …) infer their parameter from
+	// the piped-in value only in the pipe() form, so the rewrite can turn a
+	// cleanly-checking file into one full of implicit-unknown errors.
+	ConvertPipes bool
 }
 
 // Skip reasons reported in Result.SkipReason.
@@ -109,7 +116,7 @@ func Effectify(fileName string, src string, opts Options) Result {
 		return Result{Output: src, SkipReason: SkipHelperShadowed, Detail: shadowed}
 	}
 
-	r := &rewriter{src: src, file: file, helpers: bindings.helpers}
+	r := &rewriter{src: src, file: file, helpers: bindings.helpers, convertPipes: opts.ConvertPipes}
 	out := r.emit(file.AsNode())
 	if out == src || r.stats.Total() == 0 {
 		return Result{Output: src, Stats: r.stats}
