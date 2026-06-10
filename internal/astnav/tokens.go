@@ -240,6 +240,13 @@ func getTokenAtPosition(
 						if ast.IsJSDocKind(current.Kind) {
 							return current
 						}
+						if sourceFile.ScriptKind == core.ScriptKindETS || sourceFile.ScriptKind == core.ScriptKindETSX {
+							// EffectScript keywords (effect, raise, catch arm
+							// tags, ...) lower away at parse time, so source
+							// identifiers can legitimately sit in gaps of the
+							// lowered tree.
+							return sourceFile.GetOrCreateToken(token, tokenFullStart, tokenEnd, current, flags)
+						}
 						panic(fmt.Sprintf("did not expect %s to have %s in its trivia", current.Kind.String(), token.String()))
 					}
 					return sourceFile.GetOrCreateToken(token, tokenFullStart, tokenEnd, current, flags)

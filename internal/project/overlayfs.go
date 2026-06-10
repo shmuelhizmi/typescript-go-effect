@@ -310,11 +310,17 @@ func (fs *overlayFS) processChanges(changes []FileChange) (FileChangeSummary, ma
 			} else {
 				result.Reopened = uri
 			}
+			scriptKind := lsconv.LanguageKindToScriptKind(events.openChange.LanguageKind)
+			if byName := core.GetScriptKindFromFileName(uri.FileName()); byName == core.ScriptKindETS || byName == core.ScriptKindETSX {
+				// EffectScript files open with a generic TS language id in
+				// editors without a dedicated grammar; the extension wins.
+				scriptKind = byName
+			}
 			newOverlays[path] = newOverlay(
 				uri.FileName(),
 				events.openChange.Content,
 				events.openChange.Version,
-				lsconv.LanguageKindToScriptKind(events.openChange.LanguageKind),
+				scriptKind,
 			)
 			continue
 		}

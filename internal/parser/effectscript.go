@@ -476,7 +476,9 @@ func (p *Parser) parseEffectFunctionBlock() *ast.Node {
 // original source, and wires up parent pointers.
 func (p *Parser) finishSynthesized(node *ast.Node) *ast.Node {
 	node.Loc = core.NewTextRange(-1, -1)
-	node.Flags |= p.contextFlags
+	// NodeFlagsReparsed makes position-driven machinery (astnav token search,
+	// LSP navigation) skip these nodes, exactly like JSDoc reparse nodes.
+	node.Flags |= p.contextFlags | ast.NodeFlagsReparsed
 	p.overrideParentInImmediateChildren(node)
 	return node
 }
@@ -494,9 +496,37 @@ func (p *Parser) makeEffectCall(method string, args []*ast.Node, pos int, end in
 
 // makeHelperCall builds <helper>.<method>(args...) for one of the auto-imported
 // helper namespaces (Effect, Layer, Context, Fiber) and records the usage.
+//
+// When every argument is itself synthesized the whole call is marked
+// synthesized so position-driven tooling skips it; when a real subtree is
+// among the arguments the call spans the construct so navigation can descend
+// into it.
 func (p *Parser) makeHelperCall(helper string, method string, args []*ast.Node, pos int, end int) *ast.Expression {
 	access := p.makeHelperAccess(helper, method)
+	if !anyHasRealPositions(args) {
+		return p.finishSynthesized(p.factory.NewCallExpression(access, nil, nil, p.newNodeList(core.NewTextRange(-1, -1), args), ast.NodeFlagsNone))
+	}
 	return p.finishNodeWithEnd(p.factory.NewCallExpression(access, nil, nil, p.newNodeList(core.NewTextRange(pos, end), args), ast.NodeFlagsNone), pos, end)
+}
+
+func anyHasRealPositions(nodes []*ast.Node) bool {
+	for _, n := range nodes {
+		if n != nil && !ast.NodeIsSynthesized(n) {
+			return true
+		}
+	}
+	return false
+}
+
+// makePipeAccess builds receiver.pipe spanning the receiver, so navigation
+// still descends into real receiver subtrees.
+func (p *Parser) makePipeAccess(receiver *ast.Expression) *ast.Expression {
+	pipeName := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier("pipe")))
+	access := p.factory.NewPropertyAccessExpression(receiver, nil, pipeName, ast.NodeFlagsNone)
+	if ast.NodeIsSynthesized(receiver) {
+		return p.finishSynthesized(access)
+	}
+	return p.finishNodeWithEnd(access, receiver.Pos(), receiver.End())
 }
 
 func (p *Parser) makeHelperAccess(helper string, method string) *ast.Expression {
@@ -647,8 +677,7 @@ func (p *Parser) parseLayerDeclaration(pos int, modifiers *ast.ModifierList, sco
 
 	if provided != nil {
 		provideCall := p.makeHelperCall("Layer", "provide", []*ast.Node{provided}, pos, end)
-		pipeName := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier("pipe")))
-		pipeAccess := p.finishSynthesized(p.factory.NewPropertyAccessExpression(layerExpr, nil, pipeName, ast.NodeFlagsNone))
+		pipeAccess := p.makePipeAccess(layerExpr)
 		layerExpr = p.finishNodeWithEnd(p.factory.NewCallExpression(pipeAccess, nil, nil, p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{provideCall}), ast.NodeFlagsNone), pos, end)
 	}
 
@@ -901,8 +930,7 @@ func (p *Parser) parseCatchArmsPostfix(expr *ast.Expression, pos int) *ast.Expre
 	p.parseExpected(ast.KindCloseBraceToken)
 	end := p.nodePos()
 
-	pipeName := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier("pipe")))
-	pipeAccess := p.finishSynthesized(p.factory.NewPropertyAccessExpression(expr, nil, pipeName, ast.NodeFlagsNone))
+	pipeAccess := p.makePipeAccess(expr)
 	return p.finishNodeWithEnd(p.factory.NewCallExpression(pipeAccess, nil, nil, p.newNodeList(core.NewTextRange(pos, end), handlers), ast.NodeFlagsNone), pos, end)
 }
 
@@ -1061,8 +1089,7 @@ func (p *Parser) parseMatchExpression() *ast.Expression {
 		pipeArgs = append(pipeArgs, p.makeHelperAccess("Match", "exhaustive"))
 	}
 
-	pipeName := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier("pipe")))
-	pipeAccess := p.finishSynthesized(p.factory.NewPropertyAccessExpression(value, nil, pipeName, ast.NodeFlagsNone))
+	pipeAccess := p.makePipeAccess(value)
 	result := p.finishNodeWithEnd(p.factory.NewCallExpression(pipeAccess, nil, nil, p.newNodeList(core.NewTextRange(pos, end), pipeArgs), ast.NodeFlagsNone), pos, end)
 	if effectful {
 		yieldExpr := p.makeYieldStar(result, pos, end)
