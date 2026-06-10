@@ -1,8 +1,10 @@
 # EffectScript golden corpus
 
 Acceptance suite for the EffectScript implementation (see
-`docs/effectscript/IMPLEMENTATION-PLAN.md`, Phase 0). The test runner does not pick
-this directory up yet; Phase 3 wires it into `internal/testrunner` as a new suite.
+`docs/effectscript/IMPLEMENTATION-PLAN.md`). The emit corpus runs in
+`internal/parser/effectscript_corpus_test.go` (`go test ./internal/parser/ -run
+TestEffectScriptCorpus`); set `UPDATE_EFFECT_BASELINES=1` to regenerate the
+`.expected` files after an intentional lowering change.
 
 ## Layout
 
