@@ -30,6 +30,7 @@ declare global {
 const post = (msg: WorkerResponse) => self.postMessage(msg);
 
 let lspPort: MessagePort | null = null;
+let bootPromise: Promise<void> | null = null;
 let compileChain: Promise<unknown> = Promise.resolve();
 
 self.onmessage = (event: MessageEvent<WorkerRequest>) => {
@@ -37,16 +38,21 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
     switch (msg.kind) {
         case "init": {
             lspPort = event.ports[0] ?? null;
-            void boot(msg.source).then(
+            bootPromise = boot(msg.source);
+            void bootPromise.then(
                 () => post({ kind: "ready" }),
                 error => post({ kind: "fatal", message: String(error?.stack ?? error) }),
             );
             break;
         }
         case "compile": {
-            // Serialize compiles; each writes the latest source first.
+            // Serialize compiles behind boot; each writes the latest source
+            // first. The client gates on "ready" too, but a queued request
+            // must never race the wasm bring-up.
             compileChain = compileChain.then(async () => {
                 try {
+                    if (!bootPromise) throw new Error("compile before init");
+                    await bootPromise;
                     const writeError = tsgoWasm.writeFile(MAIN_FILE, msg.source);
                     if (writeError) throw new Error(writeError);
                     const result = await tsgoWasm.compile();

@@ -68,7 +68,10 @@ class WorkerClient {
     for (const listener of this.#statusListeners) listener(status, detail)
   }
 
-  compilePromise(source: string): Promise<CompileResult> {
+  async compilePromise(source: string): Promise<CompileResult> {
+    // The first compile usually arrives while the ~50MB wasm is still
+    // booting; hold requests until the worker reports ready.
+    await this.ready
     const id = this.#nextId++
     const request: WorkerRequest = { kind: "compile", id, source }
     return new Promise<CompileResult>((resolve, reject) => {

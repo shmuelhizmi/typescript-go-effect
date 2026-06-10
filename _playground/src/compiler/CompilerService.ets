@@ -14,6 +14,7 @@ export const makeCompilerLayer = (initialSource: string) =>
     compile: (source: string) =>
       Effect.tryPromise({
         try: () => getWorkerClient(initialSource).compilePromise(source),
-        catch: (cause: unknown) => new CompileError({ message: String(cause) }),
+        catch: (cause: unknown) =>
+          new CompileError({ message: cause instanceof Error ? cause.message : String(cause) }),
       }),
   })
