@@ -5,7 +5,10 @@
 
 > **Implementation status:** this spec is implemented end-to-end at `cmd/tsagent` /
 > `internal/tsagent` — all ten command families (`map`, `nav`, `type`, `refactor`,
-> `analyze`, `diagram`, `check`, `context`, `api`, `serve`), 60 commands in total.
+> `analyze`, `diagram`, `check`, `context`, `api`, `serve`), 60 commands in total,
+> plus the post-spec `edit` family (a batched, line-based symbol-edit script
+> language — move/insert/replace/delete in one transaction, **apply-by-default**;
+> documented in the [user manual](../cmd/tsagent/README.md#edit--batched-symbol-edit-scripts)).
 > The [user manual](../cmd/tsagent/README.md) is the authoritative reference for
 > the commands and flags as shipped; the remaining per-command gaps are listed in
 > its Limitations section. See the
@@ -130,6 +133,11 @@ tsagent context    …   LLM context packing
 tsagent api        …   public API surface tooling
 tsagent serve      …   session daemon & admin
 ```
+
+A post-spec eleventh family, `tsagent edit`, runs batched symbol-edit scripts
+(move/insert/replace/delete with symbol-relative addressing) as one
+transaction, applying by default. It is specified by its implementation; see
+the [README's `edit` section](../cmd/tsagent/README.md#edit--batched-symbol-edit-scripts).
 
 ---
 

@@ -1,6 +1,6 @@
 # tsagent — TypeScript language service CLI for agents
 
-`tsagent` is an agent-oriented command-line interface to this repository's native TypeScript compiler and language service. It answers the questions coding agents actually ask — "what is in this project?", "who calls this?", "what type is this?", "is it safe to rename/delete this?", "what breaks if I apply this diff?" — as single shell commands with compact, LLM-optimized text output (JSON on demand). Mutating commands are transactional: they dry-run by default, print a unified diff, and refuse to apply edits that would introduce new type errors. A session daemon (`tsagent serve`) keeps the program warm for repeated queries on large projects.
+`tsagent` is an agent-oriented command-line interface to this repository's native TypeScript compiler and language service. It answers the questions coding agents actually ask — "what is in this project?", "who calls this?", "what type is this?", "is it safe to rename/delete this?", "what breaks if I apply this diff?" — as single shell commands with compact, LLM-optimized text output (JSON on demand). Mutating commands are transactional: `refactor` commands dry-run by default, print a unified diff, and refuse to apply edits that would introduce new type errors; the batched `edit` script language applies by default behind the same gate. A session daemon (`tsagent serve`) keeps the program warm for repeated queries on large projects.
 
 - Feature specification: [`docs/agent-cli-spec.md`](../../docs/agent-cli-spec.md)
 - Architecture / implementation plan: [`docs/agent-cli-implementation-plan.md`](../../docs/agent-cli-implementation-plan.md)
@@ -120,7 +120,7 @@ flowchart LR
 Most commands accept a *target* in any of three forms:
 
 1. **Position** — `file:line:col` (1-based line and column), e.g. `src/index.ts:11:21`.
-2. **Symbol ID** — `path#qualified.name`, e.g. `src/models.ts#Container.get`. Symbol IDs are printed by `map search`, `map outline --raw`, `nav calls`, and others; paths are always relative to the project root (the tsconfig directory), so IDs are stable regardless of your cwd. Positions inside a file that have no named symbol use the fallback form `path@bytePos`.
+2. **Symbol ID** — `path#qualified.name`, e.g. `src/models.ts#Container.get`. Symbol IDs are printed by `map search`, `map outline --raw`, `nav calls`, and others; paths are always relative to the project root (the tsconfig directory), so IDs are stable regardless of your cwd. The qualified name extends through every *named scope* — functions, classes, namespaces, methods, and `const f = () => {}`-style declarators — so even function-local declarations have guessable IDs like `src/server.ts#startServer.logRequest` (blocks such as `if`/`for`/`try` are transparent; `map outline --locals` lists them). When sibling scopes declare the same name, a 0-based source-order ordinal disambiguates: `src/a.ts#f.msg~0`, `src/a.ts#f.msg~1`. Only declarations under *anonymous* scopes (callbacks, IIFEs) use the fallback form `path@bytePos`.
 3. **Name** — `--name <identifier>` resolves a declaration by name project-wide; it must be unambiguous (exits 3 when there are no matches, errors when there are several — disambiguate with `--kind` where supported, or use a symbol ID).
 
 Refactor commands also accept the target as the first positional argument and guess the form (`file:line:col` → position, contains `#`/`@` → symbol ID, otherwise name).
@@ -130,11 +130,68 @@ Refactor commands also accept the target as the first positional argument and gu
 Global flags (valid on every command, anywhere after `<family> <command>`):
 `--project <tsconfig|dir>` · `--raw` · `--format json|text|ndjson` · `--limit N` · `--offset N` · `--connect never|auto|require` (route through a running `tsagent serve` daemon; see the daemon section)
 
+### `edit` — batched symbol-edit scripts
+
+The flagship editing primitive for LLMs: a terse, line-based script language that batches many structural edits — reorder, move across files, insert raw code at symbol-relative positions, replace, delete — into **one invocation and one atomic transaction**. The whole script is validated against the original program first (every bad symbol ID and every conflicting op is reported at once, with line numbers), then applied as a single edit set behind the usual diagnostics gate.
+
+> **⚠ `edit` APPLIES BY DEFAULT** — the opposite of the `refactor` family. The type-check gate still refuses scripts that would introduce new errors (exit 4, disk untouched), and `--dry-run` previews the per-op results and diffs without writing. `--allow-errors` bypasses the gate.
+
+```
+tsagent edit <script-file|->                 # read the script from a file or stdin
+tsagent edit -e '<op line>' [-e '<op line>'…]  # inline ops, joined with newlines
+flags: --dry-run, --allow-errors
+```
+
+**Grammar** (line-based; `#` comments; raw code via heredocs `<<TAG … TAG`, verbatim, no interpolation):
+
+```
+move    <sym> before|after <sym>        # reorder within a file, or cross-file with an anchor
+move    <sym> top|end <path>            # cross-file move to a file-level position
+insert  before|after <sym> <<EOF … EOF  # raw code at a symbol-relative position
+insert  top|end <path>     <<EOF … EOF
+insert  into <class-like-sym> <<EOF … EOF   # append as the last member (class/interface/enum/namespace)
+replace <sym> <<EOF … EOF               # replaces the full declaration INCL. leading JSDoc
+delete  <sym>
+```
+
+**Symbol IDs are guessable.** The ID of any declaration is `path#<names of enclosing functions/classes/namespaces/named-arrow consts, dot-joined>.<name>`; append `~N` only if several declarations share that path. An LLM that has read a file can construct every ID without running a tool (`map outline --locals` prints them all). Unknown IDs fail with closest-match suggestions: `line 1: unknown symbol src/a.ts#helpr; closest: src/a.ts#helper`.
+
+A worked script (one transaction; `tsagent edit tidy.edit` or pipe to `tsagent edit -`):
+
+```
+# tidy server.ts
+move src/server.ts#Router before src/server.ts#startServer
+insert after src/server.ts#startServer <<EOF
+/** Gracefully stops the server. */
+export function stopServer(s: Server) {
+  return s.close();
+}
+EOF
+insert into src/server.ts#Router <<EOF
+  remove(path: string) {
+    this.routes = this.routes.filter(r => r.path !== path);
+  }
+EOF
+replace src/server.ts#startServer.logRequest <<EOF
+function logRequest(req: Request) {
+  console.log(req.method, req.url);
+}
+EOF
+delete src/server.ts#legacyHandler
+move src/server.ts#Router end src/router.ts
+```
+
+Output: one `ok line N: <op>` per op (cross-file move notes in parens), the unified diffs, and a summary — `applied: 4 file(s) changed, 0 new errors, 1 fixed` (or `dry-run: 4 file(s) would change`). `--raw` returns `{"ops": [{"line", "op", "files", "notes"}…], "tx": {…}}`.
+
+**Semantics.** All byte offsets address the *original* file text (an `insert after X` anchored on a symbol the same script moves lands at X's original location). Within-file `move` and same-class member reorders are pure text moves — the trivia-aware declaration range travels with its leading JSDoc. Cross-file `move` (anchored `before`/`after` a symbol in another file, or `top`/`end <path>`) reuses the `mv-symbol` planner: imports are rewritten in every consumer, the declaration is exported in the destination when needed, and the source re-imports it if it still uses it — with the same v1 refusals (overloads, default exports, file-local unexported deps). Members cannot move across containers (`use delete + insert into`), function-local declarations cannot move, and `edit` never creates files (use `refactor mv-symbol --create`).
+
+**Exit codes:** 2 — syntax errors, illegal ops, or overlapping ops (`line 6: delete src/a.ts#f conflicts with replace at line 1 (overlapping ranges in src/a.ts)`); 3 — unresolvable symbols/paths (all reported together, with suggestions); 4 — diagnostics-gate refusal (nothing written; the new errors are listed).
+
 ### `map` — orientation
 
 | Command | Description | Flags |
 |---|---|---|
-| `map outline <path…>` | Symbol tree per file/folder with ranges and signatures | `--depth N\|top-level\|all` (default `all`), `--exported-only`, `--kind class,interface,function,…`, `--detail names\|signatures\|full` (default `signatures`; `full` adds the first JSDoc line), `--with-ref-counts` (with `--detail full`, approximate ref counts for top-level exports; expensive) |
+| `map outline <path…>` | Symbol tree per file/folder with ranges and signatures | `--depth N\|top-level\|all` (default `all`), `--exported-only`, `--kind class,interface,function,…`, `--detail names\|signatures\|full` (default `signatures`; `full` adds the first JSDoc line), `--with-ref-counts` (with `--detail full`, approximate ref counts for top-level exports; expensive), `--locals` (descend into function bodies and list local declarations with their scoped IDs), `--symbol <id>` (print only that symbol's subtree; implies `--locals` within it) |
 | `map search <query>` | Project-wide fuzzy symbol search returning symbol IDs | `--kind …`, `--exported-only`, `--path-glob <glob>` |
 | `map files` | Program file inventory with classification (source/lib/declaration) | `--why <file>` (explain why a file is in the program: root / lib / shortest import chains from root files), `--max-chains N` (default 3) |
 | `map stats` | Per-directory counts of files, lines, symbols, exports | — |
@@ -338,7 +395,7 @@ Path globs use tsconfig include syntax (e.g. `src/**/*`, `src/*.ts`).
 
 ## Transactions: dry-run by default
 
-Every `refactor` command (and `check fix`) follows the same contract:
+Every `refactor` command (and `check fix`) follows the same contract (**exception:** `tsagent edit` applies by default and takes `--dry-run` instead of `--apply` — see its section above; the diagnostics gate is identical):
 
 1. **Dry-run is the default.** The command computes the full edit set and prints unified diffs plus `dry-run: N file(s) would change (pass --apply to write)`. Nothing is written.
 2. **`--apply` writes atomically.** Before writing, tsagent rebuilds the program in memory with the edits applied and compares diagnostics. If **new** errors would appear, the apply is **refused** (exit 4), the new errors are listed, and the disk is untouched. Pre-existing errors elsewhere in the project do not block — only the *delta* matters.

@@ -9,6 +9,7 @@ import (
 	"context"
 	"flag"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -323,6 +324,78 @@ func TestFixtureIntegration(t *testing.T) {
 			"2 members",
 			"src/dup.ts", "sumPositiveSquares", "sumPositiveWeights",
 		)
+	})
+
+	t.Run("edit_script", func(t *testing.T) {
+		// `edit` applies by default, so it runs against a throwaway copy of
+		// the fixture rather than the shared on-disk workspace.
+		dir := t.TempDir()
+		if err := os.CopyFS(dir, os.DirFS(fixtureDir())); err != nil {
+			t.Fatalf("copying fixture: %v", err)
+		}
+		editWs, err := core.NewWorkspace(core.Options{Project: dir, Cwd: dir, SingleThreaded: true})
+		if err != nil {
+			t.Fatalf("NewWorkspace(%s): %v", dir, err)
+		}
+
+		script := strings.Join([]string{
+			"# tidy the fixture in one transaction",
+			"move src/shapes.ts#area before src/shapes.ts#describeShape",
+			"insert after src/shapes.ts#describeShape <<EOF",
+			"export function perimeterHint(): string {",
+			"    return \"see area\";",
+			"}",
+			"EOF",
+			"delete src/cycle-a.ts#neverCalled",
+			"",
+		}, "\n")
+		scriptPath := filepath.Join(dir, "tidy.edit")
+		if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		result := mustInvoke(t, editWs, "edit", "", scriptPath)
+		text := render(t, result, cli.FormatText, 0, 0)
+		assertContains(t, text,
+			"ok line 2: move src/shapes.ts#area before src/shapes.ts#describeShape",
+			"ok line 3: insert after src/shapes.ts#describeShape (+3 lines)",
+			"ok line 8: delete src/cycle-a.ts#neverCalled",
+			"applied: 2 file(s) changed, 0 new errors, 0 fixed",
+		)
+
+		shapes, err := os.ReadFile(filepath.Join(dir, "src", "shapes.ts"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		areaIdx := strings.Index(string(shapes), "export function area")
+		describeIdx := strings.Index(string(shapes), "export function describeShape")
+		hintIdx := strings.Index(string(shapes), "export function perimeterHint")
+		if areaIdx < 0 || describeIdx < 0 || hintIdx < 0 || !(areaIdx < describeIdx && describeIdx < hintIdx) {
+			t.Errorf("shapes.ts op order wrong (area=%d describe=%d hint=%d):\n%s", areaIdx, describeIdx, hintIdx, shapes)
+		}
+		cycleA, err := os.ReadFile(filepath.Join(dir, "src", "cycle-a.ts"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(cycleA), "neverCalled") {
+			t.Errorf("cycle-a.ts still contains the deleted symbol:\n%s", cycleA)
+		}
+
+		// A fresh program over the edited copy must show no new diagnostics:
+		// only the deliberately planted broken.ts error remains.
+		checkWs, err := core.NewWorkspace(core.Options{Project: dir, Cwd: dir, SingleThreaded: true})
+		if err != nil {
+			t.Fatalf("NewWorkspace after edit: %v", err)
+		}
+		checkResult := mustInvoke(t, checkWs, "check", "")
+		list, ok := checkResult.(cli.Lister)
+		if !ok {
+			t.Fatalf("check result does not implement cli.Lister: %T", checkResult)
+		}
+		if list.Total() != 1 {
+			t.Errorf("expected only the planted diagnostic after the edit, got %d:\n%s",
+				list.Total(), render(t, checkResult, cli.FormatText, 0, 0))
+		}
 	})
 
 	t.Run("diagram state from the Shape union", func(t *testing.T) {
