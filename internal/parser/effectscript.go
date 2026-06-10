@@ -624,13 +624,16 @@ func (p *Parser) parseServiceDeclaration(pos int, modifiers *ast.ModifierList) *
 	shape := p.parseTypeLiteral()
 	end := p.nodePos()
 
+	// The heritage chain spans the user-written member shape so navigation
+	// machinery descends to the real property signatures inside it.
+	shapeLoc := core.NewTextRange(shape.Pos(), shape.End())
 	tagCall := p.makeHelperCall("Context", "Tag", []*ast.Node{p.makeStringLiteral(nameText, pos)}, pos, end)
 	selfRef := p.finishSynthesized(p.factory.NewTypeReferenceNode(p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier(nameText))), nil))
-	typeArgs := p.newNodeList(core.NewTextRange(-1, -1), []*ast.Node{selfRef, shape})
-	instantiated := p.finishSynthesized(p.factory.NewCallExpression(tagCall, nil, typeArgs, p.newNodeList(core.NewTextRange(-1, -1), nil), ast.NodeFlagsNone))
-	withTypeArgs := p.finishSynthesized(p.factory.NewExpressionWithTypeArguments(instantiated, nil))
-	heritage := p.finishSynthesized(p.factory.NewHeritageClause(ast.KindExtendsKeyword, p.newNodeList(core.NewTextRange(-1, -1), []*ast.Node{withTypeArgs})))
-	heritageList := p.newNodeList(core.NewTextRange(-1, -1), []*ast.Node{heritage})
+	typeArgs := p.newNodeList(shapeLoc, []*ast.Node{selfRef, shape})
+	instantiated := p.finishNodeWithEnd(p.factory.NewCallExpression(tagCall, nil, typeArgs, p.newNodeList(core.NewTextRange(-1, -1), nil), ast.NodeFlagsNone), shape.Pos(), shape.End())
+	withTypeArgs := p.finishNodeWithEnd(p.factory.NewExpressionWithTypeArguments(instantiated, nil), shape.Pos(), shape.End())
+	heritage := p.finishNodeWithEnd(p.factory.NewHeritageClause(ast.KindExtendsKeyword, p.newNodeList(shapeLoc, []*ast.Node{withTypeArgs})), shape.Pos(), shape.End())
+	heritageList := p.newNodeList(shapeLoc, []*ast.Node{heritage})
 	members := p.newNodeList(core.NewTextRange(-1, -1), nil)
 	return p.finishNodeWithEnd(p.factory.NewClassDeclaration(modifiers, name, nil, heritageList, members), pos, end)
 }
@@ -950,11 +953,12 @@ func (p *Parser) parseCatchArm() (arm *ast.Node, isCatchAll bool) {
 		}
 	}
 
-	// Optional binding: 'as e'
-	bindingName := "_"
+	// Optional binding: 'as e' — keep the real identifier node so hover,
+	// definition and rename see the user's binding at its source position.
+	var bindingIdent *ast.Node
 	if p.token == ast.KindAsKeyword {
 		p.nextToken()
-		bindingName = p.parseIdentifier().Text()
+		bindingIdent = p.parseIdentifier()
 	}
 
 	// '>>'
@@ -978,7 +982,10 @@ func (p *Parser) parseCatchArm() (arm *ast.Node, isCatchAll bool) {
 
 	emptyParams := p.newNodeList(core.NewTextRange(-1, -1), nil)
 	gen := p.makeEffectCall("gen", []*ast.Node{p.makeGeneratorExpression(emptyParams, block, armPos, armEnd)}, armPos, armEnd)
-	handler := p.makeSingleParamArrow(bindingName, gen, armPos, armEnd)
+	if bindingIdent == nil {
+		bindingIdent = p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier("_")))
+	}
+	handler := p.makeArrowWithParam(bindingIdent, gen, armPos, armEnd)
 
 	switch {
 	case isCatchAll:
@@ -1354,8 +1361,18 @@ func (p *Parser) makeMatchGuardPredicate(pat *matchPattern, guard *ast.Expressio
 }
 
 func (p *Parser) makeArrowWithParam(param *ast.Node, body *ast.Expression, pos int, end int) *ast.Expression {
-	paramDecl := p.finishSynthesized(p.factory.NewParameterDeclaration(nil, nil, param, nil, nil, nil))
-	params := p.newNodeList(core.NewTextRange(-1, -1), []*ast.Node{paramDecl})
+	// A real-positioned param (a user-written binding like `as e`) keeps its
+	// span so position-driven tooling can find it; synthesized params stay
+	// invisible.
+	var paramDecl *ast.Node
+	listLoc := core.NewTextRange(-1, -1)
+	if !ast.NodeIsSynthesized(param) {
+		paramDecl = p.finishNodeWithEnd(p.factory.NewParameterDeclaration(nil, nil, param, nil, nil, nil), param.Pos(), param.End())
+		listLoc = core.NewTextRange(param.Pos(), param.End())
+	} else {
+		paramDecl = p.finishSynthesized(p.factory.NewParameterDeclaration(nil, nil, param, nil, nil, nil))
+	}
+	params := p.newNodeList(listLoc, []*ast.Node{paramDecl})
 	arrowToken := p.finishSynthesized(p.factory.NewToken(ast.KindEqualsGreaterThanToken))
 	return p.finishNodeWithEnd(p.factory.NewArrowFunction(nil, nil, params, nil, nil, arrowToken, body), pos, end)
 }

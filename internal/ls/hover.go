@@ -37,6 +37,12 @@ func (l *LanguageService) ProvideHover(ctx context.Context, params *lsproto.Hove
 		// Avoid giving quickInfo for the sourceFile as a whole or inside the comment of a/**/.b
 		return lsproto.HoverOrNull{}, nil
 	}
+	if node.Flags&ast.NodeFlagsReparsed != 0 {
+		// A gap token in lowered EffectScript (an `effect`/`layer`/... keyword
+		// or a catch-arm tag): there is no symbol behind it, and typing it
+		// would surface a bogus `any`.
+		return lsproto.HoverOrNull{}, nil
+	}
 	c, done := program.GetTypeCheckerForFile(ctx, file)
 	defer done()
 	rangeNode := getNodeForQuickInfo(node)

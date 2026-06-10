@@ -119,6 +119,16 @@ func getTokenAtPosition(
 		if nodeList == nil || len(nodeList.Nodes) == 0 {
 			return nodeList
 		}
+		if nodeList.Pos() < 0 {
+			// Lists synthesized by the EffectScript lowering have no source
+			// positions of their own but can hold real-positioned subtrees
+			// (e.g. a catch-arm binding); test the elements directly instead
+			// of trusting the list's range.
+			for _, node := range nodeList.Nodes {
+				visitNode(node, nil)
+			}
+			return nodeList
+		}
 		if nodeAfterLeft == nil {
 			for _, node := range nodeList.Nodes {
 				if node.Flags&ast.NodeFlagsReparsed == 0 {
@@ -244,8 +254,12 @@ func getTokenAtPosition(
 							// EffectScript keywords (effect, raise, catch arm
 							// tags, ...) lower away at parse time, so source
 							// identifiers can legitimately sit in gaps of the
-							// lowered tree.
-							return sourceFile.GetOrCreateToken(token, tokenFullStart, tokenEnd, current, flags)
+							// lowered tree. Mark them Reparsed so consumers
+							// (hover, definition) treat them as non-AST tokens
+							// instead of typing them as `any`.
+							gapToken := sourceFile.GetOrCreateToken(token, tokenFullStart, tokenEnd, current, flags)
+							gapToken.Flags |= ast.NodeFlagsReparsed
+							return gapToken
 						}
 						panic(fmt.Sprintf("did not expect %s to have %s in its trivia", current.Kind.String(), token.String()))
 					}
