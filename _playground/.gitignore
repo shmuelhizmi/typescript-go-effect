@@ -2,4 +2,4 @@ node_modules/
 dist/
 public/wasm/
 public/vendor/
-public/types-pack.bin.gz
+public/types-pack.bin

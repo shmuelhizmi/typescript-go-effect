@@ -133,7 +133,13 @@ export function ets(options: EtsPluginOptions = {}): Plugin {
             const code = await fs.promises.readFile(emitted, "utf8");
             let map: string | undefined;
             try {
-                map = await fs.promises.readFile(emitted + ".map", "utf8");
+                // Re-anchor the map at the original .ets file (tsgo emits
+                // sources relative to the cache dir, which Vite can't find).
+                const parsed = JSON.parse(await fs.promises.readFile(emitted + ".map", "utf8"));
+                parsed.sources = [absolute];
+                parsed.sourcesContent = [await fs.promises.readFile(absolute, "utf8")];
+                delete parsed.sourceRoot;
+                map = JSON.stringify(parsed);
             } catch {
                 // no sourcemap emitted
             }

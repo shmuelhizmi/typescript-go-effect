@@ -10,7 +10,10 @@ import url from "node:url";
 import zlib from "node:zlib";
 
 const root = path.resolve(path.dirname(url.fileURLToPath(import.meta.url)), "..");
-const outFile = path.join(root, "public/types-pack.bin.gz");
+// Gzipped content, but NOT a .gz extension: Vite (and many static hosts)
+// serve *.gz with Content-Encoding: gzip, making the browser transparently
+// decompress and breaking the worker's explicit DecompressionStream.
+const outFile = path.join(root, "public/types-pack.bin");
 
 const packages = ["effect", "@standard-schema/spec", "fast-check", "pure-rand"];
 const encoder = new TextEncoder();

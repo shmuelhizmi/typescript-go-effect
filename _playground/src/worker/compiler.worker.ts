@@ -68,6 +68,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
 
 async function boot(initialSource: string): Promise<void> {
     const [, pack] = await Promise.all([bootWasm(), fetchTypesPack()]);
+    console.log(`[tsgo-worker] wasm + types pack loaded (${Object.keys(pack.manifest.files).length} files)`);
 
     // The pack already uses tsgoWasm.init's manifest+blob format; append the
     // workspace files (tsconfig + the editor buffer) to it.
@@ -105,11 +106,17 @@ async function bootWasm(): Promise<void> {
         );
     }
     const go = new Go();
-    const { instance } = await WebAssembly.instantiateStreaming(
-        fetchOk("/wasm/tsgo.wasm"),
-        go.importObject,
-    );
-    void go.run(instance); // resolves only if the Go program exits
+    let instance: WebAssembly.Instance;
+    try {
+        const result = await WebAssembly.instantiateStreaming(
+            fetchOk("/wasm/tsgo.wasm"),
+            go.importObject,
+        );
+        instance = result.instance;
+    } catch (error) {
+        throw new Error(`wasm instantiation failed: ${(error as Error)?.stack ?? error}`);
+    }
+    void go.run(instance!); // resolves only if the Go program exits
     if (typeof globalThis.tsgoWasm !== "object") {
         throw new Error("tsgo.wasm did not register globalThis.tsgoWasm");
     }
@@ -137,9 +144,14 @@ interface TypesPack {
 }
 
 async function fetchTypesPack(): Promise<TypesPack> {
-    const response = await fetchOk("/types-pack.bin.gz");
-    const stream = response.body!.pipeThrough(new DecompressionStream("gzip"));
-    const raw = new Uint8Array(await new Response(stream).arrayBuffer());
+    const response = await fetchOk("/types-pack.bin");
+    let raw = new Uint8Array(await response.arrayBuffer());
+    if (raw[0] === 0x1f && raw[1] === 0x8b) {
+        // Still gzipped — the server sent it verbatim. (If it served the file
+        // with Content-Encoding: gzip the browser already decompressed it.)
+        const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream("gzip"));
+        raw = new Uint8Array(await new Response(stream).arrayBuffer());
+    }
     const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
     const manifestLength = view.getUint32(0, true);
     const manifest = JSON.parse(new TextDecoder().decode(raw.subarray(4, 4 + manifestLength)));
