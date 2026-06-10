@@ -3,6 +3,7 @@ package parser
 import (
 	"github.com/microsoft/typescript-go/internal/ast"
 	"github.com/microsoft/typescript-go/internal/core"
+	"github.com/microsoft/typescript-go/internal/diagnostics"
 )
 
 // EffectScript (.ets/.etsx) parsing. See docs/effectscript/SPEC.md.
@@ -42,7 +43,10 @@ func (p *Parser) tryParseEffectScriptStatement() *ast.Statement {
 				return p.parseLayerDeclaration(p.nodePos(), nil /*modifiers*/, true /*scoped*/)
 			}
 		case "raise":
-			if p.inEffectBody && p.lookAhead((*Parser).nextIsRaiseOperandStart) {
+			if p.lookAhead((*Parser).nextIsRaiseOperandStart) {
+				if !p.inEffectBody {
+					p.parseErrorAt(p.nodePos(), p.nodePos()+len("raise"), diagnostics.X_raise_is_only_allowed_inside_an_effect_body)
+				}
 				return p.parseRaiseStatement()
 			}
 		case "defer":
@@ -50,7 +54,10 @@ func (p *Parser) tryParseEffectScriptStatement() *ast.Statement {
 				return p.parseDeferStatement()
 			}
 		}
-		if p.inEffectBody && p.lookAhead((*Parser).nextIsBindArrow) {
+		if p.lookAhead((*Parser).nextIsBindArrow) {
+			if !p.inEffectBody {
+				p.parseErrorAt(p.nodePos(), p.nodePos()+1, diagnostics.X_binds_are_only_allowed_inside_an_effect_body)
+			}
 			return p.parseBindStatement()
 		}
 	case ast.KindDeferKeyword:
@@ -62,7 +69,10 @@ func (p *Parser) tryParseEffectScriptStatement() *ast.Statement {
 			return p.parseBindStatement()
 		}
 	case ast.KindLessThanToken:
-		if p.inEffectBody && p.isAtBindArrow() {
+		if p.isAtBindArrow() {
+			if !p.inEffectBody {
+				p.parseErrorAt(p.nodePos(), p.nodePos()+2, diagnostics.X_binds_are_only_allowed_inside_an_effect_body)
+			}
 			return p.parseDiscardBindStatement()
 		}
 	default:
@@ -875,9 +885,15 @@ func (p *Parser) parseCatchArmsPostfix(expr *ast.Expression, pos int) *ast.Expre
 	p.parseExpected(ast.KindOpenBraceToken)
 
 	var handlers []*ast.Node
+	sawCatchAll := false
 	for p.token != ast.KindCloseBraceToken && p.token != ast.KindEndOfFile {
 		startTok := p.nodePos()
-		handlers = append(handlers, p.parseCatchArm())
+		if sawCatchAll {
+			p.parseErrorAt(p.nodePos(), p.nodePos()+1, diagnostics.Unreachable_match_arm_Colon_it_follows_a_catch_all_arm)
+		}
+		handler, isCatchAll := p.parseCatchArm()
+		sawCatchAll = sawCatchAll || isCatchAll
+		handlers = append(handlers, handler)
 		if p.nodePos() == startTok {
 			p.nextToken() // progress guard
 		}
@@ -890,12 +906,11 @@ func (p *Parser) parseCatchArmsPostfix(expr *ast.Expression, pos int) *ast.Expre
 	return p.finishNodeWithEnd(p.factory.NewCallExpression(pipeAccess, nil, nil, p.newNodeList(core.NewTextRange(pos, end), handlers), ast.NodeFlagsNone), pos, end)
 }
 
-func (p *Parser) parseCatchArm() *ast.Node {
+func (p *Parser) parseCatchArm() (arm *ast.Node, isCatchAll bool) {
 	armPos := p.nodePos()
 
 	// Pattern: '_' or Tag { '|' Tag }
 	var tags []string
-	isCatchAll := false
 	first := p.parseIdentifier()
 	if first.Text() == "_" {
 		isCatchAll = true
@@ -939,9 +954,9 @@ func (p *Parser) parseCatchArm() *ast.Node {
 
 	switch {
 	case isCatchAll:
-		return p.makeEffectCall("catchAll", []*ast.Node{handler}, armPos, armEnd)
+		return p.makeEffectCall("catchAll", []*ast.Node{handler}, armPos, armEnd), true
 	case len(tags) == 1:
-		return p.makeEffectCall("catchTag", []*ast.Node{p.makeStringLiteral(tags[0], armPos), handler}, armPos, armEnd)
+		return p.makeEffectCall("catchTag", []*ast.Node{p.makeStringLiteral(tags[0], armPos), handler}, armPos, armEnd), false
 	default:
 		// (h => Effect.catchTags({ Tag1: h, Tag2: h }))(handler) — one shared
 		// handler function without needing a statement position.
@@ -955,7 +970,7 @@ func (p *Parser) parseCatchArm() *ast.Node {
 		catchTags := p.makeEffectCall("catchTags", []*ast.Node{obj}, armPos, armEnd)
 		iife := p.makeSingleParamArrow("h", catchTags, armPos, armEnd)
 		paren := p.finishSynthesized(p.factory.NewParenthesizedExpression(iife))
-		return p.finishNodeWithEnd(p.factory.NewCallExpression(paren, nil, nil, p.newNodeList(core.NewTextRange(armPos, armEnd), []*ast.Node{handler}), ast.NodeFlagsNone), armPos, armEnd)
+		return p.finishNodeWithEnd(p.factory.NewCallExpression(paren, nil, nil, p.newNodeList(core.NewTextRange(armPos, armEnd), []*ast.Node{handler}), ast.NodeFlagsNone), armPos, armEnd), false
 	}
 }
 
@@ -1029,9 +1044,12 @@ func (p *Parser) parseMatchExpression() *ast.Expression {
 	hasCatchAll := false
 	for p.token != ast.KindCloseBraceToken && p.token != ast.KindEndOfFile {
 		startTok := p.nodePos()
-		arm, isCatchAll := p.parseMatchArm(tagMode, effectful)
+		if hasCatchAll {
+			p.parseErrorAt(p.nodePos(), p.nodePos()+1, diagnostics.Unreachable_match_arm_Colon_it_follows_a_catch_all_arm)
+		}
+		matchArm, isCatchAll := p.parseMatchArm(tagMode, effectful)
 		hasCatchAll = hasCatchAll || isCatchAll
-		pipeArgs = append(pipeArgs, arm)
+		pipeArgs = append(pipeArgs, matchArm)
 		if p.nodePos() == startTok {
 			p.nextToken() // progress guard
 		}
@@ -1056,12 +1074,18 @@ func (p *Parser) parseMatchExpression() *ast.Expression {
 func (p *Parser) parseMatchArm(tagMode bool, effectful bool) (arm *ast.Node, isCatchAll bool) {
 	armPos := p.nodePos()
 
+	patternPos := p.nodePos()
 	patterns := []*matchPattern{p.parseMatchPattern()}
 	for p.token == ast.KindBarToken && !p.isAtPipeOperator() {
 		p.nextToken()
 		patterns = append(patterns, p.parseMatchPattern())
 	}
 	first := patterns[0]
+	if tagMode && first.kind != matchPatternTag && first.kind != matchPatternWildcard {
+		// In tag mode every arm names a tag (or '_'); lowercase identifiers
+		// and structural patterns are mistakes.
+		p.parseErrorAt(patternPos, p.nodePos(), diagnostics.A_match_arm_pattern_must_be_a_literal_tag_reference_binding_object_pattern_or)
+	}
 
 	binding := ""
 	if p.token == ast.KindAsKeyword {

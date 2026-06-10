@@ -126,5 +126,29 @@
     "File rename is not supported by the editor": {
         "category": "Error",
         "code": 8040
+    },
+    "'<-' binds are only allowed inside an effect body.": {
+        "category": "Error",
+        "code": 18100
+    },
+    "'raise' is only allowed inside an effect body.": {
+        "category": "Error",
+        "code": 18101
+    },
+    "'{0}' is only allowed inside an effect body.": {
+        "category": "Error",
+        "code": 18120
+    },
+    "Catch arms can only be attached to an expression inside an effect body.": {
+        "category": "Error",
+        "code": 18113
+    },
+    "A match arm pattern must be a literal, tag reference, binding, object pattern, or '_'.": {
+        "category": "Error",
+        "code": 18150
+    },
+    "Unreachable match arm: it follows a catch-all arm.": {
+        "category": "Error",
+        "code": 18151
     }
 }

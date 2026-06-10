@@ -327,3 +327,49 @@ class UserRepo {
 	init := members[0].AsPropertyDeclaration().Initializer
 	assert.Equal(t, init.Kind, ast.KindCallExpression)
 }
+
+func TestEffectScriptDiagnostics(t *testing.T) {
+	t.Parallel()
+	codes := func(file *ast.SourceFile) []int32 {
+		var out []int32
+		for _, d := range file.Diagnostics() {
+			out = append(out, d.Code())
+		}
+		return out
+	}
+
+	bindOutside := parseETS(t, "function f(ea: any) {\n  x <- ea\n}\n")
+	assert.DeepEqual(t, codes(bindOutside), []int32{18100})
+
+	discardOutside := parseETS(t, "function f(ea: any) {\n  <- ea\n}\n")
+	assert.DeepEqual(t, codes(discardOutside), []int32{18100})
+
+	raiseOutside := parseETS(t, "function f() {\n  raise new Error(\"x\")\n}\n")
+	assert.DeepEqual(t, codes(raiseOutside), []int32{18101})
+
+	unreachableArm := parseETS(t, `
+const m = match (v) {
+  _ >> 1
+  2 >> 2
+};
+`)
+	assert.DeepEqual(t, codes(unreachableArm), []int32{18151})
+
+	badTagPattern := parseETS(t, `
+const m = match tag (v) {
+  notATag >> 1
+};
+`)
+	assert.DeepEqual(t, codes(badTagPattern), []int32{18150})
+
+	unreachableCatch := parseETS(t, `
+effect f(ea: any) {
+  x <- ea catch {
+    _ as e >> 1
+    NotFound >> 2
+  }
+  return x
+}
+`)
+	assert.DeepEqual(t, codes(unreachableCatch), []int32{18151})
+}

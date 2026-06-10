@@ -3756,6 +3756,18 @@ var Deferred_imports_are_only_supported_when_the_module_flag_is_set_to_esnext_or
 
 var X_0_is_not_a_valid_meta_property_for_keyword_import_Did_you_mean_meta_or_defer = &Message{code: 18061, category: CategoryError, key: "_0_is_not_a_valid_meta_property_for_keyword_import_Did_you_mean_meta_or_defer_18061", text: "'{0}' is not a valid meta-property for keyword 'import'. Did you mean 'meta' or 'defer'?"}
 
+var X_binds_are_only_allowed_inside_an_effect_body = &Message{code: 18100, category: CategoryError, key: "binds_are_only_allowed_inside_an_effect_body_18100", text: "'<-' binds are only allowed inside an effect body."}
+
+var X_raise_is_only_allowed_inside_an_effect_body = &Message{code: 18101, category: CategoryError, key: "raise_is_only_allowed_inside_an_effect_body_18101", text: "'raise' is only allowed inside an effect body."}
+
+var Catch_arms_can_only_be_attached_to_an_expression_inside_an_effect_body = &Message{code: 18113, category: CategoryError, key: "Catch_arms_can_only_be_attached_to_an_expression_inside_an_effect_body_18113", text: "Catch arms can only be attached to an expression inside an effect body."}
+
+var X_0_is_only_allowed_inside_an_effect_body = &Message{code: 18120, category: CategoryError, key: "_0_is_only_allowed_inside_an_effect_body_18120", text: "'{0}' is only allowed inside an effect body."}
+
+var A_match_arm_pattern_must_be_a_literal_tag_reference_binding_object_pattern_or = &Message{code: 18150, category: CategoryError, key: "A_match_arm_pattern_must_be_a_literal_tag_reference_binding_object_pattern_or_18150", text: "A match arm pattern must be a literal, tag reference, binding, object pattern, or '_'."}
+
+var Unreachable_match_arm_Colon_it_follows_a_catch_all_arm = &Message{code: 18151, category: CategoryError, key: "Unreachable_match_arm_Colon_it_follows_a_catch_all_arm_18151", text: "Unreachable match arm: it follows a catch-all arm."}
+
 var X_nodenext_if_module_is_nodenext_node16_if_module_is_node16_or_node18_otherwise_bundler = &Message{code: 69010, category: CategoryMessage, key: "nodenext_if_module_is_nodenext_node16_if_module_is_node16_or_node18_otherwise_bundler_69010", text: "`nodenext` if `module` is `nodenext`; `node16` if `module` is `node16` or `node18`; otherwise, `bundler`."}
 
 var File_is_a_CommonJS_module_it_may_be_converted_to_an_ES_module = &Message{code: 80001, category: CategorySuggestion, key: "File_is_a_CommonJS_module_it_may_be_converted_to_an_ES_module_80001", text: "File is a CommonJS module; it may be converted to an ES module."}
@@ -8064,6 +8076,18 @@ func keyToMessage(key Key) *Message {
 		return Deferred_imports_are_only_supported_when_the_module_flag_is_set_to_esnext_or_preserve
 	case "_0_is_not_a_valid_meta_property_for_keyword_import_Did_you_mean_meta_or_defer_18061":
 		return X_0_is_not_a_valid_meta_property_for_keyword_import_Did_you_mean_meta_or_defer
+	case "binds_are_only_allowed_inside_an_effect_body_18100":
+		return X_binds_are_only_allowed_inside_an_effect_body
+	case "raise_is_only_allowed_inside_an_effect_body_18101":
+		return X_raise_is_only_allowed_inside_an_effect_body
+	case "Catch_arms_can_only_be_attached_to_an_expression_inside_an_effect_body_18113":
+		return Catch_arms_can_only_be_attached_to_an_expression_inside_an_effect_body
+	case "_0_is_only_allowed_inside_an_effect_body_18120":
+		return X_0_is_only_allowed_inside_an_effect_body
+	case "A_match_arm_pattern_must_be_a_literal_tag_reference_binding_object_pattern_or_18150":
+		return A_match_arm_pattern_must_be_a_literal_tag_reference_binding_object_pattern_or
+	case "Unreachable_match_arm_Colon_it_follows_a_catch_all_arm_18151":
+		return Unreachable_match_arm_Colon_it_follows_a_catch_all_arm
 	case "nodenext_if_module_is_nodenext_node16_if_module_is_node16_or_node18_otherwise_bundler_69010":
 		return X_nodenext_if_module_is_nodenext_node16_if_module_is_node16_or_node18_otherwise_bundler
 	case "File_is_a_CommonJS_module_it_may_be_converted_to_an_ES_module_80001":
