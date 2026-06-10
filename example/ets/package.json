@@ -1,0 +1,12 @@
+{
+    "name": "effectscript-example",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "build": "go run ../../cmd/tsgo -p .",
+        "start": "node dist/main.js"
+    },
+    "dependencies": {
+        "effect": "^3.0.0"
+    }
+}
