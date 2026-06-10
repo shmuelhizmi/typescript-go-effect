@@ -344,15 +344,21 @@ func refactorSymbolSpans(symbol *ast.Symbol) []refactorDeletionSpan {
 }
 
 // refactorBlockingRefs returns the locations of references to refNode's
-// symbol that fall outside every span in spans (sorted, deduplicated).
+// symbol that fall outside every span in spans, deduplicated and sorted by
+// file, then line, then column.
 func refactorBlockingRefs(ctx context.Context, ws *core.Workspace, refNode *ast.Node, spans []refactorDeletionSpan) []string {
 	entries := ws.LS.GetReferencedSymbolsForNode(ctx, refNode.Pos(), refNode, ws.Program.GetSourceFiles())
-	var blocking []string
+	type blockingRef struct {
+		file      string
+		line, col int
+	}
+	var locs []blockingRef
+	unresolvable := false
 	for _, entry := range entries {
 		for _, ref := range entry.References() {
 			node := ref.Node()
 			if node == nil {
-				blocking = append(blocking, "(reference without a resolvable location)")
+				unresolvable = true
 				continue
 			}
 			file := ast.GetSourceFileOfNode(node)
@@ -361,12 +367,28 @@ func refactorBlockingRefs(ctx context.Context, ws *core.Workspace, refNode *ast.
 			})
 			if !inside {
 				line, col := ws.PosToLineCol(file, astnav.GetStartOfNode(node, file, false /*includeJSDoc*/))
-				blocking = append(blocking, fmt.Sprintf("%s:%d:%d", ws.RelPath(file.FileName()), line, col))
+				locs = append(locs, blockingRef{file: ws.RelPath(file.FileName()), line: line, col: col})
 			}
 		}
 	}
-	slices.Sort(blocking)
-	return slices.Compact(blocking)
+	slices.SortFunc(locs, func(a, b blockingRef) int {
+		if c := strings.Compare(a.file, b.file); c != 0 {
+			return c
+		}
+		if a.line != b.line {
+			return a.line - b.line
+		}
+		return a.col - b.col
+	})
+	var blocking []string
+	for _, l := range locs {
+		blocking = append(blocking, fmt.Sprintf("%s:%d:%d", l.file, l.line, l.col))
+	}
+	blocking = slices.Compact(blocking)
+	if unresolvable {
+		blocking = append(blocking, "(reference without a resolvable location)")
+	}
+	return blocking
 }
 
 func runRefactorSafeDelete(ctx context.Context, ws *core.Workspace, f *refactorSafeDeleteFlags, args []string) (*core.TxResult, error) {
@@ -523,9 +545,11 @@ func refactorDeletionNode(decl *ast.Node) *ast.Node {
 }
 
 // refactorDeletionRange computes the byte range to remove for a declaration:
-// whole lines including leading JSDoc and the trailing newline; for a
-// declarator within a multi-declarator list, the declarator plus its
-// separating comma.
+// whole lines including leading JSDoc, contiguous leading `//` line comments
+// (no blank line between the comment block and the declaration — they belong
+// to it, so they travel with moves and vanish with deletes), and the trailing
+// newline; for a declarator within a multi-declarator list, the declarator
+// plus its separating comma.
 func refactorDeletionRange(file *ast.SourceFile, node *ast.Node) icore.TextRange {
 	text := file.Text()
 	pos, end := node.Pos(), node.End()
@@ -553,6 +577,17 @@ func refactorDeletionRange(file *ast.SourceFile, node *ast.Node) icore.TextRange
 	}
 	if strings.TrimLeft(text[lineStart:start], " \t") == "" {
 		start = lineStart
+		// Contiguous leading `//` line comments belong to the declaration.
+		for start > 0 {
+			prevStart := start - 1
+			for prevStart > 0 && text[prevStart-1] != '\n' {
+				prevStart--
+			}
+			if !strings.HasPrefix(strings.TrimSpace(text[prevStart:start]), "//") {
+				break
+			}
+			start = prevStart
+		}
 	}
 	// Consume the trailing newline when the rest of the line is whitespace.
 	j := end

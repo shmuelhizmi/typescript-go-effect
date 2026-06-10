@@ -325,3 +325,27 @@ func TestRefactorMvValidatesArguments(t *testing.T) {
 		t.Errorf("existing destination: got %v, want refused", err)
 	}
 }
+
+func TestRefactorSafeDeleteBlockingRefsSortedByPosition(t *testing.T) {
+	t.Parallel()
+	// References at lines 9 and 10: a lexicographic sort of "file:line:col"
+	// strings would order :10 before :9.
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export function target(): number {\n\treturn 1;\n}\n",
+		"/project/src/b.ts": "import { target } from \"./a\";\n\n\n\n\n\n\n\nexport const x = target();\nexport const y = target();\n",
+	})
+	f := &refactorSafeDeleteFlags{target: refactorTargetFlags{name: "target"}}
+	_, err := runRefactorSafeDelete(context.Background(), ws, f, nil)
+	if err == nil || cli.ExitCode(err) != cli.ExitRefused {
+		t.Fatalf("expected a refusal, got %v", err)
+	}
+	msg := err.Error()
+	i9 := strings.Index(msg, "src/b.ts:9:")
+	i10 := strings.Index(msg, "src/b.ts:10:")
+	if i9 < 0 || i10 < 0 {
+		t.Fatalf("refusal should list both references: %v", err)
+	}
+	if i10 < i9 {
+		t.Errorf("blocking references must sort by file then numeric position (9 before 10): %v", err)
+	}
+}

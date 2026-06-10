@@ -121,17 +121,32 @@ func planSymbolMove(ctx context.Context, ws *core.Workspace, declNode *ast.Node,
 	refs := refactorReferenceNodes(ctx, ws, nameNode)
 	sourceStillUses := false
 	refFiles := make(map[*ast.SourceFile][]*ast.Node)
+	clauseSpecs := make(map[*ast.Node]bool) // export specifiers of local `export { X }` clauses in the source
 	for _, ref := range refs {
 		if inMoved(ref) {
 			continue
 		}
 		refFile := ast.GetSourceFileOfNode(ref)
 		if refFile == sourceFile {
-			// Export specifiers in the source itself (`export { X }`) have no
-			// module specifier to retarget.
+			// A local `export { X }` clause (no module specifier) exporting
+			// the moved declaration: the specifier is removed (the moved
+			// declaration is exported in the destination instead) and
+			// consumers get the normal retarget treatment. Aliased clause
+			// exports (`export { X as Y }`) would change the symbol's public
+			// name on the way and are refused.
 			if ref.Parent != nil && ref.Parent.Kind == ast.KindExportSpecifier {
-				return nil, cli.RefusedErrorf("%q is re-exported via an export clause in %s; remove or update that export first",
-					symbolName, ws.RelPath(refFile.FileName()))
+				spec := ref.Parent
+				exportDecl := ast.FindAncestor(spec, ast.IsExportDeclaration)
+				if exportDecl == nil || exportDecl.AsExportDeclaration().ModuleSpecifier != nil {
+					return nil, cli.RefusedErrorf("%q is re-exported via an export clause in %s; remove or update that export first",
+						symbolName, ws.RelPath(refFile.FileName()))
+				}
+				if s := spec.AsExportSpecifier(); s.PropertyName != nil && s.PropertyName.Text() != spec.Name().Text() {
+					return nil, cli.RefusedErrorf("%q is exported as %q via the export clause at %s; aliased clause exports of the moved symbol are not supported — export it under its own name first",
+						symbolName, spec.Name().Text(), refactorNodeLineCol(ws, exportDecl))
+				}
+				clauseSpecs[spec] = true
+				continue
 			}
 			sourceStillUses = true
 			continue
@@ -140,6 +155,24 @@ func planSymbolMove(ctx context.Context, ws *core.Workspace, declNode *ast.Node,
 	}
 	hasExternalRefs := sourceStillUses || len(refFiles) > 0
 	wasExported := declNode.ModifierFlags()&ast.ModifierFlagsExport != 0
+	exportedViaClause := len(clauseSpecs) > 0
+
+	// Clean up local `export { X }` clauses naming the moved declaration: the
+	// specifier is dropped, or the whole statement when it empties.
+	var clauseEdits []icore.TextChange
+	clauseStmts := make(map[*ast.Node]bool)
+	for spec := range clauseSpecs {
+		exportDecl := ast.FindAncestor(spec, ast.IsExportDeclaration)
+		if clauseStmts[exportDecl] {
+			continue
+		}
+		clauseStmts[exportDecl] = true
+		if len(refactorNamedReexportSpecifiers(exportDecl)) == 1 {
+			clauseEdits = append(clauseEdits, icore.TextChange{TextRange: refactorDeletionRange(sourceFile, exportDecl), NewText: ""})
+		} else {
+			clauseEdits = append(clauseEdits, refactorRemoveListSpecifierEdit(sourceText, spec))
+		}
+	}
 
 	// (a) Remove the moved declarations from the source file; (d) import the
 	// symbol back if the source still references it. When the deletions leave
@@ -154,10 +187,14 @@ func planSymbolMove(ctx context.Context, ws *core.Workspace, declNode *ast.Node,
 	for i, n := range moveOrder {
 		deletionRanges[i] = refactorDeletionRange(sourceFile, n)
 	}
+	movedTypeOnly := symbol.Flags&ast.SymbolFlagsValue == 0
 	sourceDeleted := false
 	if !sourceStillUses {
 		remaining := sourceText
 		descending := slices.Clone(deletionRanges)
+		for _, e := range clauseEdits {
+			descending = append(descending, e.TextRange)
+		}
 		slices.SortFunc(descending, func(a, b icore.TextRange) int { return b.Pos() - a.Pos() })
 		for _, r := range descending {
 			remaining = remaining[:r.Pos()] + remaining[r.End():]
@@ -175,9 +212,15 @@ func planSymbolMove(ctx context.Context, ws *core.Workspace, declNode *ast.Node,
 		for _, r := range deletionRanges {
 			sourceEdits = append(sourceEdits, icore.TextChange{TextRange: refactorCollapseBlankAfterDeletion(sourceText, r), NewText: ""})
 		}
+		sourceEdits = append(sourceEdits, clauseEdits...)
 		if sourceStillUses {
-			sourceEdits = append(sourceEdits, refactorInsertImportEdit(sourceFile, []string{symbolName},
-				refactorModuleSpecifierText(ws, sourceFile.FileName(), dest.fileAbs)))
+			backImport := []refactorImportName{{name: symbolName, local: symbolName, typeOnly: movedTypeOnly}}
+			merge, stmt := refactorPlanImports(ws, sourceFile, dest.fileAbs,
+				refactorModuleSpecifierText(ws, sourceFile.FileName(), dest.fileAbs), backImport, nil)
+			sourceEdits = append(sourceEdits, merge...)
+			if stmt != "" {
+				sourceEdits = append(sourceEdits, refactorPrependImports(sourceFile, stmt))
+			}
 			notes = append(notes, fmt.Sprintf("%s still uses %s and now imports it from %s",
 				ws.RelPath(sourceFile.FileName()), symbolName, ws.RelPath(dest.fileAbs)))
 		}
@@ -191,10 +234,14 @@ func planSymbolMove(ctx context.Context, ws *core.Workspace, declNode *ast.Node,
 	for i, n := range moveOrder {
 		r := deletionRanges[i]
 		block := sourceText[r.Pos():r.End()]
-		if n == declNode && hasExternalRefs && !wasExported {
+		if n == declNode && (hasExternalRefs || exportedViaClause) && !wasExported {
 			declStart := astnav.GetStartOfNode(declNode, sourceFile, false /*includeJSDoc*/)
 			block = block[:declStart-r.Pos()] + "export " + block[declStart-r.Pos():]
-			notes = append(notes, fmt.Sprintf("%s was exported in the destination (it has references elsewhere)", symbolName))
+			if exportedViaClause {
+				notes = append(notes, fmt.Sprintf("%s was exported via an export clause; the clause was updated and the declaration is exported in the destination", symbolName))
+			} else {
+				notes = append(notes, fmt.Sprintf("%s was exported in the destination (it has references elsewhere)", symbolName))
+			}
 		}
 		if !strings.HasSuffix(block, "\n") {
 			block += "\n"
@@ -210,20 +257,28 @@ func planSymbolMove(ctx context.Context, ws *core.Workspace, declNode *ast.Node,
 		notes = append(notes, fmt.Sprintf("moved %d file-local dependency(ies) along: %s", len(names), strings.Join(names, ", ")))
 	}
 
-	// Imports the moved block needs in the destination.
-	destImports := refactorMvSymbolDepImports(ws, dest.fileAbs, dest.file, deps)
-
 	if dest.create {
+		// Imports the moved block needs in the destination.
+		_, destImports := refactorMvSymbolDepImports(ws, dest.fileAbs, nil, deps, nil)
+		if destImports != "" {
+			destImports += "\n" // one blank line between the import block and the moved code
+		}
 		es.Ops = append(es.Ops, core.FileOp{Kind: core.FileOpCreate, Path: dest.fileAbs, Content: destImports + movedText})
 	} else {
 		destText := dest.file.Text()
 		var destEdits []icore.TextChange
+		// The destination may have imported or re-exported the symbol from
+		// the source file; those bindings must go away now that the
+		// declaration is local. Imports the statements delete entirely are
+		// never merge targets for the dependency imports below.
+		dropEdits, droppedImports := refactorDropImportOfName(ws, dest.file, sourceFile.FileName(), symbolName)
+		// Imports the moved block needs in the destination: merged into
+		// existing clauses from the same modules where possible, new
+		// statements prepended otherwise.
+		mergeEdits, destImports := refactorMvSymbolDepImports(ws, dest.fileAbs, dest.file, deps, droppedImports)
+		destEdits = append(destEdits, mergeEdits...)
 		if destImports != "" {
-			importPos := importInsertOffset(dest.file)
-			if importPos > 0 && destText[importPos-1] != '\n' {
-				destImports = "\n" + destImports
-			}
-			destEdits = append(destEdits, icore.TextChange{TextRange: icore.NewTextRange(importPos, importPos), NewText: destImports})
+			destEdits = append(destEdits, refactorPrependImports(dest.file, destImports))
 		}
 		if dest.insertPos >= 0 {
 			// Anchored insert: the moved text ends with a newline and goes at
@@ -249,10 +304,9 @@ func planSymbolMove(ctx context.Context, ws *core.Workspace, declNode *ast.Node,
 			}
 			destEdits = append(destEdits, icore.TextChange{TextRange: icore.NewTextRange(len(destText), len(destText)), NewText: insert})
 		}
-		// The destination may have imported or re-exported the symbol from the
-		// source file; those bindings must go away now that the declaration is
-		// local (the re-export becomes the local `export` modifier).
-		destEdits = append(destEdits, refactorDropImportOfName(ws, dest.file, sourceFile.FileName(), symbolName)...)
+		// Re-exports of the symbol in the destination become the local
+		// `export` modifier.
+		destEdits = append(destEdits, dropEdits...)
 		destEdits = append(destEdits, refactorDropReexportOfName(ws, dest.file, sourceFile.FileName(), symbolName)...)
 		es.Edits = append(es.Edits, core.FileEdit{FileName: dest.file.FileName(), Edits: destEdits})
 	}
@@ -271,6 +325,8 @@ func planSymbolMove(ctx context.Context, ws *core.Workspace, declNode *ast.Node,
 		var edits []icore.TextChange
 		localName := symbolName
 		foundImport := false
+		origTypeOnly := true // all removed specifiers were type-only
+		removedDecls := make(map[*ast.Node]bool)
 		for _, importDecl := range refactorImportsResolvingTo(ws, refFile, sourceFile.FileName()) {
 			for _, spec := range refactorNamedImportSpecifiers(importDecl) {
 				if refactorImportedName(spec) != symbolName {
@@ -278,6 +334,10 @@ func planSymbolMove(ctx context.Context, ws *core.Workspace, declNode *ast.Node,
 				}
 				foundImport = true
 				localName = spec.Name().Text()
+				origTypeOnly = origTypeOnly && (refactorImportClauseTypeOnly(importDecl) || spec.AsImportSpecifier().IsTypeOnly)
+				if refactorImportStatementWouldVanish(importDecl) {
+					removedDecls[importDecl] = true
+				}
 				edits = append(edits, refactorRemoveImportSpecifierEdit(refFile, importDecl, spec))
 			}
 		}
@@ -319,11 +379,12 @@ func planSymbolMove(ctx context.Context, ws *core.Workspace, declNode *ast.Node,
 				ws.RelPath(refFile.FileName()), symbolName)
 		}
 		if foundImport {
-			importName := symbolName
-			if localName != symbolName {
-				importName = symbolName + " as " + localName
+			name := []refactorImportName{{name: symbolName, local: localName, typeOnly: movedTypeOnly || origTypeOnly}}
+			merge, stmt := refactorPlanImports(ws, refFile, dest.fileAbs, newSpecRel(refFile), name, removedDecls)
+			edits = append(edits, merge...)
+			if stmt != "" {
+				edits = append(edits, refactorPrependImports(refFile, stmt))
 			}
-			edits = append(edits, refactorInsertImportEdit(refFile, []string{importName}, newSpecRel(refFile)))
 		}
 		es.Edits = append(es.Edits, core.FileEdit{FileName: refFile.FileName(), Edits: edits})
 	}
@@ -339,6 +400,7 @@ type refactorMvSymbolDep struct {
 	fromFile  string // absolute file to import from ("" = keep original specifier)
 	origSpec  string // original module specifier text (for unresolved/package imports)
 	binding   string // "named" (default), "default", or "namespace"
+	typeOnly  bool   // import as a type (type-only origin, or a symbol with no value meaning)
 }
 
 // refactorMvSymbolBlocker is one file-local unexported declaration the moved
@@ -472,7 +534,20 @@ func refactorMvSymbolDeps(ctx context.Context, ws *core.Workspace, sourceFile *a
 			if widened.Parent == nil || widened.Parent.Kind != ast.KindSourceFile {
 				continue // locals of enclosing scopes cannot occur for top-level decls
 			}
+			typeOnly := sym.Flags&ast.SymbolFlagsValue == 0
 			exported := widened.ModifierFlags()&ast.ModifierFlagsExport != 0 || depDecl.ModifierFlags()&ast.ModifierFlagsExport != 0
+			exportedName := id.Text()
+			if !exported {
+				// A declaration without an export modifier may still be
+				// exported via a trailing `export { … }` clause (incl.
+				// aliased): treated exactly like an inline export — it stays
+				// behind and the destination imports it back under the
+				// exported name.
+				if clauseSpec := refactorClauseExportSpec(sourceFile, id.Text()); clauseSpec != nil {
+					exported = true
+					exportedName = clauseSpec.Name().Text()
+				}
+			}
 			if !exported {
 				desc := fmt.Sprintf("%s (%s)", id.Text(), refactorNodeLineCol(ws, depDecl))
 				if !seen["!"+desc] {
@@ -483,7 +558,7 @@ func refactorMvSymbolDeps(ctx context.Context, ws *core.Workspace, sourceFile *a
 			}
 			if !seen[id.Text()] {
 				seen[id.Text()] = true
-				deps = append(deps, refactorMvSymbolDep{name: id.Text(), localName: id.Text(), fromFile: sourceFile.FileName()})
+				deps = append(deps, refactorMvSymbolDep{name: exportedName, localName: id.Text(), fromFile: sourceFile.FileName(), typeOnly: typeOnly})
 			}
 		}
 	}
@@ -498,18 +573,20 @@ func refactorImportBindingDep(ws *core.Workspace, sourceFile *ast.SourceFile, de
 	if importDecl == nil {
 		return refactorMvSymbolDep{}, false
 	}
+	clauseTypeOnly := refactorImportClauseTypeOnly(importDecl)
 	var dep refactorMvSymbolDep
 	switch depDecl.Kind {
 	case ast.KindImportSpecifier:
-		dep = refactorMvSymbolDep{name: refactorImportedName(depDecl), localName: depDecl.Name().Text(), binding: "named"}
+		dep = refactorMvSymbolDep{name: refactorImportedName(depDecl), localName: depDecl.Name().Text(), binding: "named",
+			typeOnly: clauseTypeOnly || depDecl.AsImportSpecifier().IsTypeOnly}
 	case ast.KindImportClause: // default import binding
 		name := depDecl.AsImportClause().Name()
 		if name == nil {
 			return refactorMvSymbolDep{}, false
 		}
-		dep = refactorMvSymbolDep{name: name.Text(), localName: name.Text(), binding: "default"}
+		dep = refactorMvSymbolDep{name: name.Text(), localName: name.Text(), binding: "default", typeOnly: clauseTypeOnly}
 	case ast.KindNamespaceImport:
-		dep = refactorMvSymbolDep{name: depDecl.Name().Text(), localName: depDecl.Name().Text(), binding: "namespace"}
+		dep = refactorMvSymbolDep{name: depDecl.Name().Text(), localName: depDecl.Name().Text(), binding: "namespace", typeOnly: clauseTypeOnly}
 	default:
 		return refactorMvSymbolDep{}, false
 	}
@@ -522,11 +599,23 @@ func refactorImportBindingDep(ws *core.Workspace, sourceFile *ast.SourceFile, de
 	return dep, true
 }
 
-// refactorMvSymbolDepImports renders the import statements the destination
-// needs for the moved block's dependencies. Names already declared in the
-// destination are skipped.
-func refactorMvSymbolDepImports(ws *core.Workspace, destAbs string, destFile *ast.SourceFile, deps []refactorMvSymbolDep) string {
-	bySpec := make(map[string][]string)
+// refactorMvSymbolDepImports plans the imports the destination needs for the
+// moved block's dependencies. For an existing destination file it returns
+// merge edits into existing import clauses from the same modules plus a block
+// of new import statements; for a created file (destFile nil) only the block
+// is returned. Named bindings group one statement per module (`import type`
+// when every name is type-only, inline `type` modifiers when mixed); default
+// and namespace bindings get their own statements. Names already declared in
+// the destination are skipped; skip marks destination import declarations
+// other edits of the same plan delete entirely.
+func refactorMvSymbolDepImports(ws *core.Workspace, destAbs string, destFile *ast.SourceFile, deps []refactorMvSymbolDep, skip map[*ast.Node]bool) (mergeEdits []icore.TextChange, newBlock string) {
+	type moduleGroup struct {
+		targetAbs string
+		spec      string
+		names     []refactorImportName
+	}
+	quote := refactorImportQuote(destFile)
+	groups := make(map[string]*moduleGroup)
 	var order []string
 	var singles []string // default/namespace bindings get their own statements
 	for _, dep := range deps {
@@ -537,45 +626,78 @@ func refactorMvSymbolDepImports(ws *core.Workspace, destAbs string, destFile *as
 		if dep.fromFile != "" {
 			spec = refactorModuleSpecifierText(ws, destAbs, dep.fromFile)
 		}
+		keyword := "import "
+		if dep.typeOnly {
+			keyword = "import type "
+		}
 		switch dep.binding {
 		case "default":
-			singles = append(singles, "import "+dep.localName+" from \""+spec+"\";\n")
+			singles = append(singles, keyword+dep.localName+" from "+quote+spec+quote+";\n")
 			continue
 		case "namespace":
-			singles = append(singles, "import * as "+dep.localName+" from \""+spec+"\";\n")
+			singles = append(singles, keyword+"* as "+dep.localName+" from "+quote+spec+quote+";\n")
 			continue
 		}
-		name := dep.name
-		if dep.localName != dep.name {
-			name = dep.name + " as " + dep.localName
-		}
-		if _, ok := bySpec[spec]; !ok {
+		g, ok := groups[spec]
+		if !ok {
+			g = &moduleGroup{targetAbs: dep.fromFile, spec: spec}
+			groups[spec] = g
 			order = append(order, spec)
 		}
-		bySpec[spec] = append(bySpec[spec], name)
+		g.names = append(g.names, refactorImportName{name: dep.name, local: dep.localName, typeOnly: dep.typeOnly})
 	}
 	var sb strings.Builder
 	for _, spec := range order {
-		sb.WriteString("import { " + strings.Join(bySpec[spec], ", ") + " } from \"" + spec + "\";\n")
+		g := groups[spec]
+		if destFile != nil {
+			edits, stmt := refactorPlanImports(ws, destFile, g.targetAbs, g.spec, g.names, skip)
+			mergeEdits = append(mergeEdits, edits...)
+			sb.WriteString(stmt)
+			continue
+		}
+		sb.WriteString(refactorRenderImportStatement(g.names, g.spec, quote))
 	}
 	for _, single := range singles {
 		sb.WriteString(single)
 	}
-	return sb.String()
+	return mergeEdits, sb.String()
+}
+
+// refactorClauseExportSpec returns the export specifier of a module-local
+// `export { … }` clause (no module specifier) in file whose LOCAL name is
+// localName — `export { localName }` or `export { localName as alias }` — or
+// nil when the file has none.
+func refactorClauseExportSpec(file *ast.SourceFile, localName string) *ast.Node {
+	for _, stmt := range file.Statements.Nodes {
+		if stmt.Kind != ast.KindExportDeclaration || stmt.AsExportDeclaration().ModuleSpecifier != nil {
+			continue
+		}
+		for _, spec := range refactorNamedReexportSpecifiers(stmt) {
+			if refactorReexportedSourceName(spec) == localName {
+				return spec
+			}
+		}
+	}
+	return nil
 }
 
 // refactorDropImportOfName removes the named-import specifier binding `name`
-// from imports of fromFileName inside file (no-op when absent).
-func refactorDropImportOfName(ws *core.Workspace, file *ast.SourceFile, fromFileName string, name string) []icore.TextChange {
+// from imports of fromFileName inside file (no-op when absent). The second
+// result marks the import declarations the edits delete entirely.
+func refactorDropImportOfName(ws *core.Workspace, file *ast.SourceFile, fromFileName string, name string) ([]icore.TextChange, map[*ast.Node]bool) {
 	var edits []icore.TextChange
+	removed := make(map[*ast.Node]bool)
 	for _, importDecl := range refactorImportsResolvingTo(ws, file, fromFileName) {
 		for _, spec := range refactorNamedImportSpecifiers(importDecl) {
 			if refactorImportedName(spec) == name {
+				if refactorImportStatementWouldVanish(importDecl) {
+					removed[importDecl] = true
+				}
 				edits = append(edits, refactorRemoveImportSpecifierEdit(file, importDecl, spec))
 			}
 		}
 	}
-	return edits
+	return edits, removed
 }
 
 // refactorDropReexportOfName removes the `export { name } from` specifier

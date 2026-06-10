@@ -129,7 +129,24 @@ func projectFiles(ws *core.Workspace, paths []string) ([]*ast.SourceFile, error)
 		}
 	}
 	if len(abs) > 0 && len(files) == 0 {
-		return nil, cli.NotFoundErrorf("no program files under %s", strings.Join(paths, ", "))
+		// Distinguish "the path exists but the tsconfig leaves it out" from a
+		// plain typo: agents react very differently to the two.
+		var reasons []string
+		for _, p := range paths {
+			exists := false
+			for _, a := range []string{ws.AbsPath(p), tspath.GetNormalizedAbsolutePath(p, ws.RootDir)} {
+				if ws.FS.FileExists(a) || ws.FS.DirectoryExists(a) {
+					exists = true
+					break
+				}
+			}
+			if exists {
+				reasons = append(reasons, fmt.Sprintf("%s exists but is not included by the project tsconfig", p))
+			} else {
+				reasons = append(reasons, fmt.Sprintf("%s: no such file or directory", p))
+			}
+		}
+		return nil, cli.NotFoundErrorf("no program files under %s: %s", strings.Join(paths, ", "), strings.Join(reasons, "; "))
 	}
 	return files, nil
 }

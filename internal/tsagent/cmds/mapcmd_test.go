@@ -766,3 +766,21 @@ func TestMapOutlineTypeAliasSignatureUsesSourceText(t *testing.T) {
 		t.Errorf("Long signature = %q, want whitespace-collapsed source text", long.Signature)
 	}
 }
+
+func TestProjectFilesExcludedVsMissing(t *testing.T) {
+	t.Parallel()
+	// A path the tsconfig leaves out reads differently from a typo.
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/tsconfig.json": `{"compilerOptions": {"strict": true, "target": "esnext"}, "include": ["src/**/*"]}`,
+		"/project/src/a.ts":      "export const a = 1;\n",
+		"/project/scripts/x.ts":  "export const x = 1;\n",
+	})
+	_, err := projectFiles(ws, []string{"scripts/x.ts"})
+	if err == nil || !strings.Contains(err.Error(), "scripts/x.ts exists but is not included by the project tsconfig") {
+		t.Errorf("excluded path: got %v, want the not-included explanation", err)
+	}
+	_, err = projectFiles(ws, []string{"src/nope.ts"})
+	if err == nil || !strings.Contains(err.Error(), "src/nope.ts: no such file or directory") {
+		t.Errorf("missing path: got %v, want no-such-file", err)
+	}
+}

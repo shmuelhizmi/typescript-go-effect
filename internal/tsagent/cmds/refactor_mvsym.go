@@ -7,6 +7,7 @@ import (
 
 	"github.com/microsoft/typescript-go/internal/tsagent/cli"
 	"github.com/microsoft/typescript-go/internal/tsagent/core"
+	"github.com/microsoft/typescript-go/internal/tspath"
 )
 
 // refactor mv-symbol (§4.4): move ONE top-level declaration
@@ -74,6 +75,12 @@ func runRefactorMvSymbol(ctx context.Context, ws *core.Workspace, f *refactorMvS
 		}
 		if !f.create {
 			return nil, cli.UsageErrorf("destination %s does not exist (pass --create to create it)", ws.RelPath(destAbs))
+		}
+		if !tspath.ContainsPath(ws.RootDir, destAbs, tspath.ComparePathsOptions{
+			CurrentDirectory:          ws.Cwd,
+			UseCaseSensitiveFileNames: ws.FS.UseCaseSensitiveFileNames(),
+		}) {
+			return nil, cli.UsageErrorf("destination %s is outside the project root (%s); --create only creates files inside the project", f.to, ws.RootDir)
 		}
 		creating = true
 	}

@@ -61,9 +61,11 @@ func TestSymbolMoveAnchoredInsertPos(t *testing.T) {
 	if math != want {
 		t.Errorf("math.ts = %q, want %q", math, want)
 	}
+	// main.ts already imported PI from ./math: the retargeted import MERGES
+	// into that clause instead of prepending a second statement.
 	main := readWorkspaceFile(t, ws, "/project/src/main.ts")
-	if !strings.Contains(main, "import { double } from \"./math\";") {
-		t.Errorf("importer not rewritten: %q", main)
+	if !strings.Contains(main, "import { PI, double } from \"./math\";") {
+		t.Errorf("importer not rewritten (merge into the existing ./math clause expected): %q", main)
 	}
 	if ws.FS.FileExists("/project/src/util.ts") {
 		t.Error("util.ts became empty and should have been deleted")
@@ -94,7 +96,9 @@ func TestSymbolMoveAnchoredKeepsDepImportsAtTop(t *testing.T) {
 		t.Fatalf("result = %+v, want clean apply", result)
 	}
 	dest := readWorkspaceFile(t, ws, "/project/src/dest.ts")
-	want := "import { BASE } from \"./base\";\nexport const first = 1;\n\nexport function scaled(n: number): number {\n\treturn n * BASE;\n}\n\nexport const last = 2;\n"
+	// One blank line separates the prepended import block from the first
+	// non-import statement.
+	want := "import { BASE } from \"./base\";\n\nexport const first = 1;\n\nexport function scaled(n: number): number {\n\treturn n * BASE;\n}\n\nexport const last = 2;\n"
 	if dest != want {
 		t.Errorf("dest.ts = %q, want %q", dest, want)
 	}

@@ -180,21 +180,253 @@ func importInsertOffset(file *ast.SourceFile) int {
 	return offset
 }
 
-// refactorInsertImportEdit produces an edit inserting an import statement at
-// the top of a file, below any shebang and directive prologue (so a leading
-// `"use client";` keeps its meaning).
-func refactorInsertImportEdit(file *ast.SourceFile, names []string, specifier string) icore.TextChange {
+// refactorImportName is one named binding an import plan must make available
+// in a file: the exported name in the target module, the local alias to bind,
+// and whether the binding is type-only (interfaces, type aliases — anything
+// without a value meaning — or bindings that were type-only at their origin).
+type refactorImportName struct {
+	name     string
+	local    string
+	typeOnly bool
+}
+
+// render writes the specifier text of one name. Inside a value clause,
+// type-only names carry an inline `type` modifier; inside an `import type`
+// clause the modifier would be redundant (and illegal).
+func (n refactorImportName) render(inValueClause bool) string {
+	s := n.name
+	if n.local != n.name {
+		s = n.name + " as " + n.local
+	}
+	if n.typeOnly && inValueClause {
+		s = "type " + s
+	}
+	return s
+}
+
+// refactorImportQuote returns the quote character used by the file's first
+// import/export module specifier (falling back to `"`), so synthesized import
+// statements match the file's prevailing style.
+func refactorImportQuote(file *ast.SourceFile) string {
+	if file == nil {
+		return "\""
+	}
+	for _, stmt := range file.Statements.Nodes {
+		var spec *ast.Node
+		switch stmt.Kind {
+		case ast.KindImportDeclaration:
+			spec = stmt.AsImportDeclaration().ModuleSpecifier
+		case ast.KindExportDeclaration:
+			spec = stmt.AsExportDeclaration().ModuleSpecifier
+		}
+		if spec != nil && ast.IsStringLiteral(spec) {
+			pos := scanner.SkipTrivia(file.Text(), spec.Pos())
+			if q := file.Text()[pos]; q == '\'' || q == '"' {
+				return string(q)
+			}
+		}
+	}
+	return "\""
+}
+
+// refactorRenderImportStatement renders ONE new import statement binding
+// names from specText — the documented convention: one statement per module,
+// `import type { … }` when every name is type-only, a value import with
+// inline `type` modifiers when value and type names mix.
+func refactorRenderImportStatement(names []refactorImportName, specText string, quote string) string {
+	allType := true
+	for _, n := range names {
+		if !n.typeOnly {
+			allType = false
+			break
+		}
+	}
+	parts := make([]string, len(names))
+	for i, n := range names {
+		parts[i] = n.render(!allType)
+	}
+	keyword := "import "
+	if allType {
+		keyword = "import type "
+	}
+	return keyword + "{ " + strings.Join(parts, ", ") + " } from " + quote + specText + quote + ";\n"
+}
+
+// refactorImportClauseTypeOnly reports whether an import declaration's clause
+// is type-only (`import type … from`).
+func refactorImportClauseTypeOnly(importDecl *ast.Node) bool {
+	clause := importDecl.AsImportDeclaration().ImportClause
+	return clause != nil && clause.AsImportClause().PhaseModifier == ast.KindTypeKeyword
+}
+
+// refactorImportStatementWouldVanish reports whether removing one named
+// specifier from importDecl deletes the whole statement (sole named specifier
+// and no default binding) — refactorRemoveImportSpecifierEdit's rule.
+func refactorImportStatementWouldVanish(importDecl *ast.Node) bool {
+	clause := importDecl.AsImportDeclaration().ImportClause
+	return clause != nil && clause.AsImportClause().Name() == nil && len(refactorNamedImportSpecifiers(importDecl)) == 1
+}
+
+// refactorPlanImports plans binding `names` from one module in file. Names
+// the file already imports from that module (same exported name and local
+// alias) are dropped; the remaining names MERGE into an existing import
+// clause from the same module when one can take them, appended at the end of
+// its specifier list; whatever cannot merge is returned as new import
+// statement text for the caller to insert at the import-insertion offset
+// (refactorPrependImports).
+//
+// Merge rules (the README's documented convention):
+//   - value names append to an existing value clause's named-import list, or
+//     extend a default-only import (`import d from "m"` → `import d, { x } from "m"`);
+//   - type-only names prefer an existing `import type { … }` clause, else
+//     they join a value clause with an inline `type` modifier;
+//   - namespace imports (`import * as ns`) and type-only clauses never take
+//     value names, and a type-only default (`import type d from "m"`) takes
+//     nothing — those cases fall through to a new statement.
+//
+// skip marks import declarations that other edits of the same plan delete
+// entirely (never merged into, never satisfying a name). targetAbs matches
+// existing imports by resolved module; when "" (package or unresolved
+// specifiers) the specifier text is compared instead.
+func refactorPlanImports(ws *core.Workspace, file *ast.SourceFile, targetAbs string, specText string, names []refactorImportName, skip map[*ast.Node]bool) (edits []icore.TextChange, newStmt string) {
+	var candidates []*ast.Node
+	if targetAbs != "" {
+		candidates = refactorImportsResolvingTo(ws, file, targetAbs)
+	} else {
+		for _, stmt := range file.Statements.Nodes {
+			if stmt.Kind != ast.KindImportDeclaration {
+				continue
+			}
+			spec := stmt.AsImportDeclaration().ModuleSpecifier
+			if spec != nil && ast.IsStringLiteral(spec) && spec.Text() == specText {
+				candidates = append(candidates, stmt)
+			}
+		}
+	}
+	if len(skip) > 0 {
+		kept := candidates[:0]
+		for _, decl := range candidates {
+			if !skip[decl] {
+				kept = append(kept, decl)
+			}
+		}
+		candidates = kept
+	}
+
+	// Drop names the module already provides under the same local alias (a
+	// type-only need is satisfied by any existing binding; a value need only
+	// by a value binding).
+	provided := func(n refactorImportName) bool {
+		for _, decl := range candidates {
+			clauseTypeOnly := refactorImportClauseTypeOnly(decl)
+			for _, spec := range refactorNamedImportSpecifiers(decl) {
+				if refactorImportedName(spec) != n.name || spec.Name().Text() != n.local {
+					continue
+				}
+				if n.typeOnly || (!clauseTypeOnly && !spec.AsImportSpecifier().IsTypeOnly) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	var pending []refactorImportName
+	for _, n := range names {
+		if !provided(n) {
+			pending = append(pending, n)
+		}
+	}
+	if len(pending) == 0 {
+		return nil, ""
+	}
+
+	// Pick merge targets: one `import type { … }` clause for type names, one
+	// value clause (named list, or default-only) for everything else.
+	var typeTarget, valueTarget *ast.Node
+	for _, decl := range candidates {
+		clauseNode := decl.AsImportDeclaration().ImportClause
+		if clauseNode == nil {
+			continue // side-effect import `import "m"`
+		}
+		clause := clauseNode.AsImportClause()
+		named := clause.NamedBindings != nil && clause.NamedBindings.Kind == ast.KindNamedImports &&
+			len(clause.NamedBindings.AsNamedImports().Elements.Nodes) > 0
+		defaultOnly := clause.NamedBindings == nil && clause.Name() != nil
+		if refactorImportClauseTypeOnly(decl) {
+			if named && typeTarget == nil {
+				typeTarget = decl
+			}
+		} else if (named || defaultOnly) && valueTarget == nil {
+			valueTarget = decl
+		}
+	}
+
+	var intoType, intoValue, leftover []refactorImportName
+	for _, n := range pending {
+		switch {
+		case n.typeOnly && typeTarget != nil:
+			intoType = append(intoType, n)
+		case valueTarget != nil:
+			intoValue = append(intoValue, n)
+		default:
+			leftover = append(leftover, n)
+		}
+	}
+	appendToClause := func(decl *ast.Node, ns []refactorImportName, inValueClause bool) icore.TextChange {
+		parts := make([]string, len(ns))
+		for i, n := range ns {
+			parts[i] = n.render(inValueClause)
+		}
+		if specs := refactorNamedImportSpecifiers(decl); len(specs) > 0 {
+			last := specs[len(specs)-1]
+			return icore.TextChange{TextRange: icore.NewTextRange(last.End(), last.End()), NewText: ", " + strings.Join(parts, ", ")}
+		}
+		// Default-only clause: extend with a named-import list.
+		nameEnd := decl.AsImportDeclaration().ImportClause.AsImportClause().Name().End()
+		return icore.TextChange{TextRange: icore.NewTextRange(nameEnd, nameEnd), NewText: ", { " + strings.Join(parts, ", ") + " }"}
+	}
+	if len(intoType) > 0 {
+		edits = append(edits, appendToClause(typeTarget, intoType, false))
+	}
+	if len(intoValue) > 0 {
+		edits = append(edits, appendToClause(valueTarget, intoValue, true))
+	}
+	if len(leftover) > 0 {
+		newStmt = refactorRenderImportStatement(leftover, specText, refactorImportQuote(file))
+	}
+	return edits, newStmt
+}
+
+// refactorPrependImports renders the insertion of a block of new import
+// statements at the file's import-insertion offset: below any shebang and
+// directive prologue, glued to an existing leading import block, and — when
+// no import follows at that offset — separated from the first following
+// statement by exactly one blank line.
+func refactorPrependImports(file *ast.SourceFile, block string) icore.TextChange {
+	text := file.Text()
 	pos := importInsertOffset(file)
-	newText := "import { " + strings.Join(names, ", ") + " } from \"" + specifier + "\";\n"
-	if pos > 0 && file.Text()[pos-1] != '\n' {
+	if pos > 0 && text[pos-1] != '\n' {
 		// Directive (or shebang) without a trailing newline: keep it on its
 		// own line.
-		newText = "\n" + newText
+		block = "\n" + block
 	}
-	return icore.TextChange{
-		TextRange: icore.NewTextRange(pos, pos),
-		NewText:   newText,
+	if !editBlankLineAt(text, pos) && !refactorImportFollowsAt(file, pos) {
+		block += "\n"
 	}
+	return icore.TextChange{TextRange: icore.NewTextRange(pos, pos), NewText: block}
+}
+
+// refactorImportFollowsAt reports whether the first statement ending at or
+// after pos is an import declaration (i.e. an insertion at pos joins an
+// existing import block).
+func refactorImportFollowsAt(file *ast.SourceFile, pos int) bool {
+	for _, stmt := range file.Statements.Nodes {
+		if stmt.End() <= pos {
+			continue
+		}
+		return stmt.Kind == ast.KindImportDeclaration
+	}
+	return false
 }
 
 // refactorCollapseBlankAfterDeletion widens a whole-line deletion range by one

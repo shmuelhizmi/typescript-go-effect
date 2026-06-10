@@ -956,3 +956,98 @@ func TestEditInsertIntoReplacedContainerConflicts(t *testing.T) {
 		t.Errorf("raw byte-offset engine errors must never surface: %q", msg)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Enum member insertion (round-3 FIX 4)
+
+func TestEditInsertIntoEnumBothCommaStyles(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export enum WithComma {\n\tA = 1,\n}\nexport enum NoComma {\n\tB = 1\n}\nexport enum Empty {}\n",
+	})
+	script := strings.Join([]string{
+		"insert into src/a.ts#WithComma <<EOF",
+		"\tC = 2,",
+		"EOF",
+		"insert into src/a.ts#NoComma <<EOF",
+		"\tD = 2",
+		"EOF",
+		"insert into src/a.ts#Empty <<EOF",
+		"\tE = 1,",
+		"EOF",
+		"",
+	}, "\n")
+	result := mustRunEditScript(t, ws, script)
+	if !result.Tx.Applied || len(result.Tx.NewErrors) != 0 {
+		t.Fatalf("tx = %+v, want clean apply", result.Tx)
+	}
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	if !strings.Contains(text, "export enum WithComma {\n\tA = 1,\n\tC = 2,\n}") {
+		t.Errorf("trailing-comma enum: new member must land AFTER the comma, on its own line:\n%s", text)
+	}
+	if !strings.Contains(text, "export enum NoComma {\n\tB = 1,\n\tD = 2\n}") {
+		t.Errorf("no-trailing-comma enum: a separating comma must be added to the previous member:\n%s", text)
+	}
+	if !strings.Contains(text, "export enum Empty {\n\tE = 1,\n}") {
+		t.Errorf("empty enum: the member must land inside the braces:\n%s", text)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Leading line-comment travel (round-3 polish)
+
+func TestEditMoveCarriesLeadingLineComments(t *testing.T) {
+	t.Parallel()
+	// Contiguous leading `//` comments (no blank line between them and the
+	// declaration) belong to the declaration and travel with the move.
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "// mutually recursive helpers\n// keep together\nexport function f1(): number {\n\treturn 1;\n}\n\nexport function f2(): number {\n\treturn 2;\n}\n",
+	})
+	result := mustRunEditScript(t, ws, "move src/a.ts#f1 after src/a.ts#f2\n")
+	if !result.Tx.Applied || len(result.Tx.NewErrors) != 0 {
+		t.Fatalf("tx = %+v, want clean apply", result.Tx)
+	}
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	indexOrder(t, text, "function f2", "// mutually recursive helpers", "// keep together", "function f1")
+	if !strings.HasPrefix(text, "export function f2") {
+		t.Errorf("no orphaned comment may remain at the top:\n%s", text)
+	}
+}
+
+func TestEditMoveLeavesBlankSeparatedCommentBehind(t *testing.T) {
+	t.Parallel()
+	// A blank line between the comment block and the declaration detaches it:
+	// the comment is a file header and stays put.
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "// file header\n\nexport function f1(): number {\n\treturn 1;\n}\nexport function f2(): number {\n\treturn 2;\n}\n",
+	})
+	mustRunEditScript(t, ws, "move src/a.ts#f1 after src/a.ts#f2\n")
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	if !strings.HasPrefix(text, "// file header\n") {
+		t.Errorf("the blank-separated header must stay at the top:\n%s", text)
+	}
+	indexOrder(t, text, "// file header", "function f2", "function f1")
+}
+
+func TestEditInsertBeforeLandsAboveLeadingComments(t *testing.T) {
+	t.Parallel()
+	// `insert before X` must not split X from its leading line comments.
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export function f0(): number {\n\treturn 0;\n}\n\n// belongs to f1\nexport function f1(): number {\n\treturn 1;\n}\n",
+	})
+	mustRunEditScript(t, ws, "insert before src/a.ts#f1 <<EOF\nexport const mid = 1;\nEOF\n")
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	indexOrder(t, text, "function f0", "const mid", "// belongs to f1", "function f1")
+}
+
+func TestEditDeleteRemovesLeadingLineComments(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export function keep(): number {\n\treturn 0;\n}\n\n// explains gone\nfunction gone(): number {\n\treturn 1;\n}\n",
+	})
+	mustRunEditScript(t, ws, "delete src/a.ts#gone\n")
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	if strings.Contains(text, "explains gone") || strings.Contains(text, "function gone") {
+		t.Errorf("the declaration's leading comment must be deleted with it:\n%s", text)
+	}
+}

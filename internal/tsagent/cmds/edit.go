@@ -470,12 +470,21 @@ func (b *editBuilder) buildOp(ctx context.Context, r editResolvedOp) error {
 		b.addEdit(r.declFile.FileName(), icore.TextChange{TextRange: dr, NewText: newText})
 		b.report(op, editGroupNotes(nodes, "replaced"), b.ws.RelPath(r.declFile.FileName()))
 	case "insert":
-		file, pos, err := editInsertPos(r)
+		file, pos, prefix, err := editInsertPos(r)
 		if err != nil {
 			b.failf(op, "%v", err)
 			return nil
 		}
-		newText := editNormalizeEOL(file.Text(), editSeparateBlock(r, file, pos, editEnsureNewline(op.Body)))
+		block := editSeparateBlock(r, file, pos, editEnsureNewline(op.Body))
+		if prefix != "" {
+			// Mid-line separator insert (enum member after a member without a
+			// trailing comma): the original line break at pos survives, so the
+			// block must not bring a second one.
+			if rest := file.Text()[pos:]; strings.HasPrefix(rest, "\n") || strings.HasPrefix(rest, "\r\n") {
+				block = strings.TrimSuffix(block, "\n")
+			}
+		}
+		newText := editNormalizeEOL(file.Text(), prefix+block)
 		b.inserts = append(b.inserts, editInsertMark{line: op.Line, raw: op.Raw, file: file.FileName(), pos: pos})
 		b.addEdit(file.FileName(), icore.TextChange{TextRange: icore.NewTextRange(pos, pos), NewText: newText})
 		b.report(op, nil, b.ws.RelPath(file.FileName()))
@@ -572,9 +581,11 @@ func editIDHasOrdinal(id string) bool {
 	return err == nil
 }
 
-// editInsertPos resolves an insert op's file and byte offset. `top` lands
-// below any shebang and directive prologue (`"use client";`), never above it.
-func editInsertPos(r editResolvedOp) (*ast.SourceFile, int, error) {
+// editInsertPos resolves an insert op's file, byte offset, and a separator
+// prefix the inserted text must carry (a `,` when appending an enum member
+// after a member without a trailing comma). `top` lands below any shebang and
+// directive prologue (`"use client";`), never above it.
+func editInsertPos(r editResolvedOp) (*ast.SourceFile, int, string, error) {
 	// A bare overload-group anchor means "the whole group": before → ahead of
 	// the first signature, after → past the last declaration.
 	first, last := r.anchorNode, r.anchorNode
@@ -583,21 +594,21 @@ func editInsertPos(r editResolvedOp) (*ast.SourceFile, int, error) {
 	}
 	switch r.op.Place.Kind {
 	case "before":
-		return r.anchorFile, refactorDeletionRange(r.anchorFile, first).Pos(), nil
+		return r.anchorFile, refactorDeletionRange(r.anchorFile, first).Pos(), "", nil
 	case "after":
-		return r.anchorFile, refactorDeletionRange(r.anchorFile, last).End(), nil
+		return r.anchorFile, refactorDeletionRange(r.anchorFile, last).End(), "", nil
 	case "top":
-		return r.destFile, importInsertOffset(r.destFile), nil
+		return r.destFile, importInsertOffset(r.destFile), "", nil
 	case "end":
-		return r.destFile, len(r.destFile.Text()), nil
+		return r.destFile, len(r.destFile.Text()), "", nil
 	case "into":
-		pos, err := editInsertIntoPos(r.anchorFile, r.anchorDecl)
+		pos, prefix, err := editInsertIntoPos(r.anchorFile, r.anchorDecl)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, "", err
 		}
-		return r.anchorFile, pos, nil
+		return r.anchorFile, pos, prefix, nil
 	}
-	return nil, 0, fmt.Errorf("unknown insert place %q", r.op.Place.Kind)
+	return nil, 0, "", fmt.Errorf("unknown insert place %q", r.op.Place.Kind)
 }
 
 // editSeparateBlock prepares inserted raw code for the target position: it
@@ -651,8 +662,13 @@ func editBlankLineAt(text string, pos int) bool {
 
 // editInsertIntoPos computes the offset for `insert into <container>`: after
 // the last member's deletion range, or right after the opening brace (skipping
-// blank trivia) when the body is empty.
-func editInsertIntoPos(file *ast.SourceFile, container *ast.Node) (int, error) {
+// blank trivia) when the body is empty. Enum members are comma-separated, so
+// for enums the offset lands AFTER the last member's trailing comma (start of
+// the next line when the comma ends its line) — and when the last member has
+// no trailing comma, the returned prefix carries the `,` the insertion must
+// add to keep the body syntactically valid (the inserted body itself is raw;
+// commas inside it are the caller's responsibility).
+func editInsertIntoPos(file *ast.SourceFile, container *ast.Node) (pos int, prefix string, err error) {
 	var list *ast.NodeList
 	switch container.Kind {
 	case ast.KindClassDeclaration, ast.KindClassExpression, ast.KindInterfaceDeclaration, ast.KindEnumDeclaration:
@@ -660,25 +676,48 @@ func editInsertIntoPos(file *ast.SourceFile, container *ast.Node) (int, error) {
 	case ast.KindModuleDeclaration:
 		body := container.Body()
 		if body == nil || body.Kind != ast.KindModuleBlock {
-			return 0, fmt.Errorf("insert into: the namespace has no block body")
+			return 0, "", fmt.Errorf("insert into: the namespace has no block body")
 		}
 		list = body.AsModuleBlock().Statements
 	default:
-		return 0, fmt.Errorf("insert into requires a class, interface, enum, or namespace target")
+		return 0, "", fmt.Errorf("insert into requires a class, interface, enum, or namespace target")
 	}
 	if list == nil {
-		return 0, fmt.Errorf("insert into: the container has no member list")
-	}
-	if n := len(list.Nodes); n > 0 {
-		return refactorDeletionRange(file, list.Nodes[n-1]).End(), nil
+		return 0, "", fmt.Errorf("insert into: the container has no member list")
 	}
 	text := file.Text()
-	pos := list.Pos()
+	if n := len(list.Nodes); n > 0 {
+		last := list.Nodes[n-1]
+		if container.Kind == ast.KindEnumDeclaration {
+			j := last.End()
+			for j < len(text) && (text[j] == ' ' || text[j] == '\t') {
+				j++
+			}
+			if j >= len(text) || text[j] != ',' {
+				// No trailing comma: insert right after the member, adding one.
+				return last.End(), ",", nil
+			}
+			j++ // past the comma
+			k := j
+			for k < len(text) && (text[k] == ' ' || text[k] == '\t') {
+				k++
+			}
+			if k < len(text) && text[k] == '\r' {
+				k++
+			}
+			if k < len(text) && text[k] == '\n' {
+				return k + 1, "", nil // start of the line after the comma
+			}
+			return j, "", nil // comma followed by non-whitespace (e.g. a comment)
+		}
+		return refactorDeletionRange(file, last).End(), "", nil
+	}
+	pos = list.Pos()
 	for pos < len(text) && pos < container.End() &&
 		(text[pos] == ' ' || text[pos] == '\t' || text[pos] == '\r' || text[pos] == '\n') {
 		pos++
 	}
-	return pos, nil
+	return pos, "", nil
 }
 
 // buildMove classifies a move op: within-file/same-container moves are pure
