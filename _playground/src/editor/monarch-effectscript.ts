@@ -21,6 +21,8 @@ const ETS_KEYWORDS = [
     "scoped",
     "join",
     "match",
+    "tagged",
+    "schema",
 ];
 
 export const effectscriptConf: languages.LanguageConfiguration = tsConf;

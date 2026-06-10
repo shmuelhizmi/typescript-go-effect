@@ -19,9 +19,13 @@ const { instance } = await WebAssembly.instantiate(
 void go.run(instance);
 const tsgo = globalThis.tsgoWasm;
 
-const source = `import { Data } from "effect";
+const source = `tagged error NotFound {
+  id: string
+}
 
-class NotFound extends Data.TaggedError("NotFound")<{ id: string }> {}
+schema Person {
+  name: Schema.String
+}
 
 service Greeter {
   greeting: Effect.Effect<string>
@@ -182,10 +186,19 @@ send({
 });
 const diag = await request("textDocument/diagnostic", { textDocument: { uri: "file:///project/main.ets" } });
 console.log(`diagnostics: ${diag.result?.items?.length ?? "?"}`);
+for (const item of diag.result?.items ?? []) console.log("  diag:", JSON.stringify(item.range), item.code, item.message);
 
 const lines = source.split("\n");
 // [needle-line-substring, symbol, occurrence offset within symbol]
 const targets = [
+    ["tagged error NotFound", "tagged"],
+    ["tagged error NotFound", "error"],
+    ["tagged error NotFound", "NotFound"],
+    ["id: string", "id"],
+    ["schema Person", "schema"],
+    ["schema Person", "Person"],
+    ["name: Schema.String", "name"],
+    ["name: Schema.String", "Schema"],
     ["service Greeter", "service"],
     ["layer GreeterLive", "layer"],
     ["effect findUser", "effect"],

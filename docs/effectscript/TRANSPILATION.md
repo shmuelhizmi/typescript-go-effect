@@ -3,7 +3,7 @@
 Normative desugaring from EffectScript constructs into TypeScript + the `effect`
 library. Notation: `⟦x⟧` is the desugaring of `x`; `body'` is a body with all
 EffectScript statements recursively desugared. Identifiers introduced by the
-desugarer (`Effect`, `Layer`, `Context`, `Fiber`, `Match`, `pipe`) refer to the auto-imported
+desugarer (`Effect`, `Layer`, `Context`, `Fiber`, `Match`, `Data`, `Schema`, `pipe`) refer to the auto-imported
 bindings (SPEC §1.2).
 
 These rules are **the** semantics of EffectScript (SPEC §14).
@@ -48,6 +48,27 @@ Normative simplification: the method becomes an instance field holding the
 `Effect.fn` value; `this` inside `body` refers to the instance (arrow-like capture
 via the field initializer scope). `static effect m` becomes a static field with
 `"C.m"` as span name.
+
+### 1.4 `tagged error` declaration
+
+```
+⟦ tagged error E { props } ⟧ =
+  class E extends Data.TaggedError("E")<{ props }> {}
+```
+
+Props transfer verbatim as the type argument; an empty body lowers to `<{}>`.
+`Data` joins the synthesized import (§12).
+
+### 1.5 `schema` declaration
+
+```
+⟦ schema S { fields } ⟧ =
+  class S extends Schema.Class<S>("S")({ fields }) {}
+```
+
+Fields are expressions (`name: Schema.String`); separators between fields are
+optional (newline-separated like service members, trailing commas allowed).
+`Schema` joins the synthesized import (§12).
 
 ## 2. Binds
 
@@ -240,7 +261,7 @@ annotation. For plain `: T` annotations, `satisfies (…) => T`.
 After desugaring a file, for each referenced helper namespace not already imported:
 
 ```ts
-import { Effect } from "effect";          // and/or Layer, Context, Fiber, Match, pipe
+import { Effect } from "effect";          // and/or Layer, Context, Fiber, Match, Data, Schema, pipe
 ```
 
 with `"effect"` replaced by `effectImportSource`. Synthesized specifiers merge into

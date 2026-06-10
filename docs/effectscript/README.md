@@ -70,7 +70,8 @@ with the expected output. Working today, in `.ets`/`.etsx` files:
 `effect` declarations/blocks/anonymous fns/class methods · bare immutable binds
 (`x <- e`, destructuring, typed, `(<- e)`) · `raise`/`raise.die` ·
 postfix `catch { Tag as e >> … }` arms · `match (x)` / `match tag (x)` with
-guards and or-patterns · `service`/`layer`/`scoped layer`/`provide` · `par`/
+guards and or-patterns · `service`/`layer`/`scoped layer`/`provide` ·
+`tagged error`/`schema` declarations · `par`/
 `race`/`fork`/`join` · `using … release`/`defer` · the `|>` pipeline ·
 `A raises E requires R` type sugar · auto-imports · dedicated
 diagnostics (18100/18101/18150/18151) · golden-corpus acceptance tests

@@ -10,7 +10,15 @@ import (
 	"github.com/microsoft/typescript-go/internal/parser"
 )
 
-const effectScriptNavSource = `service Greeter {
+const effectScriptNavSource = `tagged error Missing {
+  key: string
+}
+
+schema Person {
+  name: Schema.String
+}
+
+service Greeter {
   greeting: Effect.Effect<string>
 }
 
@@ -65,6 +73,9 @@ func TestEffectScriptKeywordGapTokens(t *testing.T) {
 		{"effect findUser", "effect"},
 		{"raises NotFound", "raises"},
 		{`if (id === "") raise`, "raise"},
+		{"tagged error Missing", "tagged"},
+		{"tagged error Missing", "error"},
+		{"schema Person", "schema"},
 	} {
 		pos := navPosition(t, probe.needle, probe.word)
 		node := astnav.GetTouchingPropertyName(file, pos)
@@ -90,6 +101,8 @@ func TestEffectScriptRealNodesReachable(t *testing.T) {
 		{"NotFound as e >>", "e", ast.KindParameter},
 		{"greeting: Effect.Effect<string>", "greeting", ast.KindPropertySignature},
 		{"user <- findUser", "user", ast.KindVariableDeclaration},
+		{"key: string", "key", ast.KindPropertySignature},
+		{"name: Schema.String", "name", ast.KindPropertyAssignment},
 	} {
 		pos := navPosition(t, probe.needle, probe.word)
 		node := astnav.GetTouchingPropertyName(file, pos)

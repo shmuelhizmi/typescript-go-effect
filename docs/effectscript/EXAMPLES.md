@@ -8,9 +8,9 @@ Each example shows EffectScript source and its exact transpilation.
 
 ```ts
 // users.ets
-import { Data } from "effect";
-
-class NotFound extends Data.TaggedError("NotFound")<{ id: string }> {}
+tagged error NotFound {
+  id: string
+}
 
 service UserRepo {
   findById(id: string): User | undefined raises DbError
@@ -27,8 +27,7 @@ effect getUser(id: string): User raises NotFound | DbError requires UserRepo {
 ⇣ transpiles to
 
 ```ts
-import { Data } from "effect";
-import { Effect, Context } from "effect";
+import { Effect, Context, Data } from "effect";
 
 class NotFound extends Data.TaggedError("NotFound")<{ id: string }> {}
 

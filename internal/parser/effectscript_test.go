@@ -422,3 +422,89 @@ export effect f() {
 	assert.Equal(t, outer.Kind, ast.KindCallExpression)
 	assert.Equal(t, len(outer.AsCallExpression().Arguments.Nodes), 1, "generator only, no combinators")
 }
+
+func TestEffectScriptTaggedErrorDeclaration(t *testing.T) {
+	t.Parallel()
+	file := parseETS(t, `
+tagged error NotFound {
+  id: string
+}
+
+export tagged error Empty {}
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0, "expected no parse diagnostics")
+
+	stmts := file.Statements.Nodes
+	// import (Data injected), NotFound, Empty
+	assert.Equal(t, len(stmts), 3)
+	assert.Equal(t, stmts[0].Kind, ast.KindImportDeclaration)
+
+	decl := stmts[1].AsClassDeclaration()
+	assert.Equal(t, decl.Name().Text(), "NotFound")
+	heritage := decl.HeritageClauses.Nodes[0].AsHeritageClause()
+	withTypeArgs := heritage.Types.Nodes[0].AsExpressionWithTypeArguments()
+	call := withTypeArgs.Expression.AsCallExpression()
+	access := call.Expression.AsPropertyAccessExpression()
+	assert.Equal(t, access.Expression.Text(), "Data")
+	assert.Equal(t, access.Name().Text(), "TaggedError")
+	assert.Equal(t, call.Arguments.Nodes[0].Text(), "NotFound")
+	assert.Equal(t, len(withTypeArgs.TypeArguments.Nodes), 1)
+	shape := withTypeArgs.TypeArguments.Nodes[0]
+	assert.Equal(t, shape.Kind, ast.KindTypeLiteral)
+	assert.Equal(t, shape.AsTypeLiteralNode().Members.Nodes[0].Name().Text(), "id")
+
+	exported := stmts[2]
+	assert.Assert(t, ast.HasSyntacticModifier(exported, ast.ModifierFlagsExport))
+	emptyShape := exported.AsClassDeclaration().HeritageClauses.Nodes[0].AsHeritageClause().Types.Nodes[0].AsExpressionWithTypeArguments().TypeArguments.Nodes[0]
+	assert.Equal(t, len(emptyShape.AsTypeLiteralNode().Members.Nodes), 0)
+}
+
+func TestEffectScriptSchemaDeclaration(t *testing.T) {
+	t.Parallel()
+	file := parseETS(t, `
+schema Person {
+  name: Schema.String
+  age:  Schema.Number,
+}
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0, "expected no parse diagnostics")
+
+	stmts := file.Statements.Nodes
+	assert.Equal(t, len(stmts), 2)
+	assert.Equal(t, stmts[0].Kind, ast.KindImportDeclaration)
+
+	decl := stmts[1].AsClassDeclaration()
+	assert.Equal(t, decl.Name().Text(), "Person")
+	withTypeArgs := decl.HeritageClauses.Nodes[0].AsHeritageClause().Types.Nodes[0].AsExpressionWithTypeArguments()
+	outer := withTypeArgs.Expression.AsCallExpression()
+	fields := outer.Arguments.Nodes[0]
+	assert.Equal(t, fields.Kind, ast.KindObjectLiteralExpression)
+	props := fields.AsObjectLiteralExpression().Properties.Nodes
+	assert.Equal(t, len(props), 2)
+	assert.Equal(t, props[0].Name().Text(), "name")
+	assert.Equal(t, props[1].Name().Text(), "age")
+
+	inner := outer.Expression.AsCallExpression()
+	access := inner.Expression.AsPropertyAccessExpression()
+	assert.Equal(t, access.Expression.Text(), "Schema")
+	assert.Equal(t, access.Name().Text(), "Class")
+	assert.Equal(t, inner.Arguments.Nodes[0].Text(), "Person")
+	assert.Equal(t, inner.TypeArguments.Nodes[0].AsTypeReferenceNode().TypeName.Text(), "Person")
+}
+
+func TestEffectScriptTaggedSchemaContextual(t *testing.T) {
+	t.Parallel()
+	// tagged / schema / error stay usable as plain identifiers.
+	file := parseETS(t, `
+const tagged = 1;
+const schema = (x: number) => x;
+const error = schema(tagged);
+const obj = { tagged, error };
+tagged
+error
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0, "expected no parse diagnostics")
+	for _, s := range file.Statements.Nodes {
+		assert.Assert(t, s.Kind != ast.KindClassDeclaration, "no declaration sugar should trigger")
+	}
+}

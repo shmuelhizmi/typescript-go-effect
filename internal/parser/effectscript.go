@@ -34,6 +34,14 @@ func (p *Parser) tryParseEffectScriptStatement() *ast.Statement {
 			if p.lookAhead((*Parser).nextIsServiceDeclarationStart) {
 				return p.parseServiceDeclaration(p.nodePos(), nil /*modifiers*/)
 			}
+		case "tagged":
+			if p.lookAhead((*Parser).nextIsTaggedErrorDeclarationStart) {
+				return p.parseTaggedErrorDeclaration(p.nodePos(), nil /*modifiers*/)
+			}
+		case "schema":
+			if p.lookAhead((*Parser).nextIsSchemaDeclarationStart) {
+				return p.parseSchemaDeclaration(p.nodePos(), nil /*modifiers*/)
+			}
 		case "layer":
 			if p.lookAhead((*Parser).nextIsLayerDeclarationStart) {
 				return p.parseLayerDeclaration(p.nodePos(), nil /*modifiers*/, false /*scoped*/)
@@ -121,6 +129,20 @@ func (p *Parser) nextIsServiceDeclarationStart() bool {
 	return p.nextToken() == ast.KindOpenBraceToken
 }
 
+// tagged error Name {
+func (p *Parser) nextIsTaggedErrorDeclarationStart() bool {
+	p.nextToken()
+	if p.token != ast.KindIdentifier || p.scanner.TokenValue() != "error" || p.hasPrecedingLineBreak() {
+		return false
+	}
+	return p.nextIsServiceDeclarationStart()
+}
+
+// schema Name {
+func (p *Parser) nextIsSchemaDeclarationStart() bool {
+	return p.nextIsServiceDeclarationStart()
+}
+
 func (p *Parser) nextIsLayerDeclarationStart() bool {
 	p.nextToken()
 	if p.token != ast.KindIdentifier || p.hasPrecedingLineBreak() {
@@ -169,6 +191,14 @@ func (p *Parser) tryParseEffectScriptDeclaration(pos int, modifiers *ast.Modifie
 		if p.lookAhead((*Parser).nextIsServiceDeclarationStart) {
 			return p.parseServiceDeclaration(pos, modifiers)
 		}
+	case "tagged":
+		if p.lookAhead((*Parser).nextIsTaggedErrorDeclarationStart) {
+			return p.parseTaggedErrorDeclaration(pos, modifiers)
+		}
+	case "schema":
+		if p.lookAhead((*Parser).nextIsSchemaDeclarationStart) {
+			return p.parseSchemaDeclaration(pos, modifiers)
+		}
 	case "layer":
 		if p.lookAhead((*Parser).nextIsLayerDeclarationStart) {
 			return p.parseLayerDeclaration(pos, modifiers, false /*scoped*/)
@@ -193,6 +223,10 @@ func (p *Parser) scanStartOfEffectScriptDeclaration() bool {
 		return p.nextIsEffectDeclarationStart()
 	case "service":
 		return p.nextIsServiceDeclarationStart()
+	case "tagged":
+		return p.nextIsTaggedErrorDeclarationStart()
+	case "schema":
+		return p.nextIsSchemaDeclarationStart()
 	case "layer":
 		return p.nextIsLayerDeclarationStart()
 	case "scoped":
@@ -517,7 +551,7 @@ func (p *Parser) makeGeneratorExpression(parameters *ast.NodeList, body *ast.Nod
 }
 
 // effectHelperImportOrder fixes the specifier order of the synthesized import.
-var effectHelperImportOrder = []string{"Effect", "Layer", "Context", "Fiber", "Match"}
+var effectHelperImportOrder = []string{"Effect", "Layer", "Context", "Fiber", "Match", "Data", "Schema"}
 
 // injectEffectScriptImports prepends `import { Effect, Layer, ... } from
 // "effect";` for every helper namespace the lowering referenced that the user
@@ -599,6 +633,80 @@ func (p *Parser) parseServiceDeclaration(pos int, modifiers *ast.ModifierList) *
 	heritageList := p.newNodeList(shapeLoc, []*ast.Node{heritage})
 	members := p.newNodeList(core.NewTextRange(-1, -1), nil)
 	return p.finishNodeWithEnd(p.factory.NewClassDeclaration(modifiers, name, nil, heritageList, members), pos, end)
+}
+
+// tagged error Name { props }
+//
+//	==>  class Name extends Data.TaggedError("Name")<{ props }> {}
+func (p *Parser) parseTaggedErrorDeclaration(pos int, modifiers *ast.ModifierList) *ast.Statement {
+	p.nextToken() // consume 'tagged'
+	p.nextToken() // consume 'error'
+	name := p.parseIdentifier()
+	nameText := name.Text()
+	shape := p.parseTypeLiteral()
+	end := p.nodePos()
+
+	// The heritage chain spans the user-written prop shape so navigation
+	// machinery descends to the real property signatures inside it.
+	shapeLoc := core.NewTextRange(shape.Pos(), shape.End())
+	tagCall := p.makeHelperCall("Data", "TaggedError", []*ast.Node{p.makeStringLiteral(nameText, pos)}, pos, end)
+	typeArgs := p.newNodeList(shapeLoc, []*ast.Node{shape})
+	withTypeArgs := p.finishNodeWithEnd(p.factory.NewExpressionWithTypeArguments(tagCall, typeArgs), shape.Pos(), shape.End())
+	heritage := p.finishNodeWithEnd(p.factory.NewHeritageClause(ast.KindExtendsKeyword, p.newNodeList(shapeLoc, []*ast.Node{withTypeArgs})), shape.Pos(), shape.End())
+	heritageList := p.newNodeList(shapeLoc, []*ast.Node{heritage})
+	members := p.newNodeList(core.NewTextRange(-1, -1), nil)
+	return p.finishNodeWithEnd(p.factory.NewClassDeclaration(modifiers, name, nil, heritageList, members), pos, end)
+}
+
+// schema Name { fields }
+//
+//	==>  class Name extends Schema.Class<Name>("Name")({ fields }) {}
+func (p *Parser) parseSchemaDeclaration(pos int, modifiers *ast.ModifierList) *ast.Statement {
+	p.nextToken() // consume 'schema'
+	name := p.parseIdentifier()
+	nameText := name.Text()
+	fields := p.parseSchemaFields()
+	end := p.nodePos()
+
+	// The heritage chain spans the user-written fields object so navigation
+	// machinery descends to the real property assignments inside it.
+	fieldsLoc := core.NewTextRange(fields.Pos(), fields.End())
+	classAccess := p.makeHelperAccess("Schema", "Class")
+	selfRef := p.finishSynthesized(p.factory.NewTypeReferenceNode(p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier(nameText))), nil))
+	nameArgs := p.newNodeList(core.NewTextRange(-1, -1), []*ast.Node{p.makeStringLiteral(nameText, pos)})
+	inner := p.finishSynthesized(p.factory.NewCallExpression(classAccess, nil, p.newNodeList(core.NewTextRange(-1, -1), []*ast.Node{selfRef}), nameArgs, ast.NodeFlagsNone))
+	outer := p.finishNodeWithEnd(p.factory.NewCallExpression(inner, nil, nil, p.newNodeList(fieldsLoc, []*ast.Node{fields}), ast.NodeFlagsNone), fields.Pos(), fields.End())
+	withTypeArgs := p.finishNodeWithEnd(p.factory.NewExpressionWithTypeArguments(outer, nil), fields.Pos(), fields.End())
+	heritage := p.finishNodeWithEnd(p.factory.NewHeritageClause(ast.KindExtendsKeyword, p.newNodeList(fieldsLoc, []*ast.Node{withTypeArgs})), fields.Pos(), fields.End())
+	heritageList := p.newNodeList(fieldsLoc, []*ast.Node{heritage})
+	members := p.newNodeList(core.NewTextRange(-1, -1), nil)
+	return p.finishNodeWithEnd(p.factory.NewClassDeclaration(modifiers, name, nil, heritageList, members), pos, end)
+}
+
+// parseSchemaFields parses `{ name: Expr ... }` — an object literal of schema
+// field expressions where commas/semicolons between fields are optional
+// (newline-separated, like service members).
+func (p *Parser) parseSchemaFields() *ast.Expression {
+	pos := p.nodePos()
+	p.parseExpected(ast.KindOpenBraceToken)
+	listPos := p.nodePos()
+	var props []*ast.Node
+	for p.token != ast.KindCloseBraceToken && p.token != ast.KindEndOfFile {
+		propPos := p.nodePos()
+		propName := p.parsePropertyName()
+		p.parseExpected(ast.KindColonToken)
+		value := p.parseAssignmentExpressionOrHigher()
+		props = append(props, p.finishNodeWithEnd(p.factory.NewPropertyAssignment(nil, propName, nil, nil, value), propPos, p.nodePos()))
+		// Field separators are optional: consume a comma or semicolon if
+		// present, otherwise rely on the line break.
+		if p.token == ast.KindCommaToken || p.token == ast.KindSemicolonToken {
+			p.nextToken()
+		}
+	}
+	// Like parseDelimitedList, the list range ends before the close brace.
+	list := p.newNodeList(core.NewTextRange(listPos, p.nodePos()), props)
+	p.parseExpected(ast.KindCloseBraceToken)
+	return p.finishNode(p.factory.NewObjectLiteralExpression(list, true /*multiLine*/), pos)
 }
 
 // [scoped] layer Name: Tag [provide [a, b]] { body }   /   layer Name: Tag = expr

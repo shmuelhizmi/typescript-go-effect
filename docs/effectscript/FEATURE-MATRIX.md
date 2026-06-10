@@ -12,6 +12,7 @@ How every major area of the `effect` library is expressed in EffectScript.
 | Success value | `return` in gen | `return` | ✅ inherited |
 | Typed failures | `Effect.fail` | `raise e` | ✅ syntax |
 | Defects | `Effect.die` | `raise.die e` | ✅ syntax |
+| Error classes | `Data.TaggedError` | `tagged error E { props }` | ✅ syntax |
 | Catch by tag | `Effect.catchTag` | `e catch { NotFound [as x] >> … }` | ✅ syntax |
 | Catch multiple tags | `Effect.catchTags` | `e catch { A \| B as x >> … }` | ✅ syntax |
 | Catch all | `Effect.catchAll` | `e catch { _ as x >> … }` | ✅ syntax |
@@ -48,7 +49,7 @@ How every major area of the `effect` library is expressed in EffectScript.
 | Match exhaustiveness | `Match.exhaustive` / `orElse` | no `_` arm → exhaustive; `_` arm → fallback | ✅ syntax |
 | Streams | `Stream.*` | binds + `\|>`; comprehensions | 🔮 future |
 | STM | `STM.gen` | `atomic { }` | 🔮 future |
-| Schema | `effect/Schema` | literal type syntax | 🔮 future |
+| Schema | `Schema.Class` | `schema S { name: Schema.String }` | ✅ syntax |
 
 **Design test applied throughout:** a feature only gets dedicated syntax when the
 library forces either generator boilerplate (`function*`/`yield*`), class

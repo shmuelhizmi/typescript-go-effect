@@ -1,7 +1,8 @@
-import { Data } from "effect";
+tagged error NotFound {
+  id: string
+}
 
-class NotFound extends Data.TaggedError("NotFound")<{ id: string }> {}
-class RateLimited extends Data.TaggedError("RateLimited")<{}> {}
+tagged error RateLimited {}
 
 service Greeter {
   greeting: Effect.Effect<string>

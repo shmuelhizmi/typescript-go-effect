@@ -59,9 +59,9 @@ Precedent: the scanner already re-tokenizes `>>` vs `>`+`>` based on context.
 
 ### 2.2 Contextual keywords
 
-`effect`, `raise`, `service`, `layer`, `fork`, `par`, `race`, `defer`, `release`,
-`raises`, `requires`, `provide`, `scoped`, `join`, `match` (and the noise words
-`value` / `tag` immediately after `match`).
+`effect`, `raise`, `service`, `layer`, `tagged`, `error`, `schema`, `fork`,
+`par`, `race`, `defer`, `release`, `raises`, `requires`, `provide`, `scoped`,
+`join`, `match` (and the noise words `value` / `tag` immediately after `match`).
 
 None become reserved words. Each is recognized only in the specific grammatical
 positions defined below (like `async`, `satisfies`, `accessor`). Look-ahead rules:
@@ -74,8 +74,10 @@ positions defined below (like `async`, `satisfies`, `accessor`). Look-ahead rule
   effect body cannot call user functions with these names in those positions
   (workaround: parenthesize, e.g. `(raise)(x)`); outside effect bodies they are
   ordinary identifiers.
-* `service`, `layer` are keywords at declaration position when followed by an
-  identifier (same scheme as `type`, `namespace`).
+* `service`, `layer`, `schema` are keywords at declaration position when followed
+  by an identifier (same scheme as `type`, `namespace`); `schema` additionally
+  requires `{` after the name. `tagged` is a keyword only in the exact sequence
+  `tagged error Name {`; `error` only as its second word.
 * `raises`, `requires` are keywords only inside an effect-signature return clause
   (§3.2). `release` only after the operand of a `using`-bind (§8). `scoped` only as
   a modifier of `layer`/`effect`. `provide` only as an infix clause of `layer`
@@ -214,6 +216,22 @@ const x = cond ? value : raise new Boom();   // expression (never type)
 * `raise.die e;` → `Effect.die(e)` (defects). `raise` alone covers the typed error
   channel.
 
+### 5.1 `tagged error` declaration
+
+Declares a tagged error class without the `Data.TaggedError` boilerplate. Props
+are type members (newline-separated, like `service`); the body may be empty.
+
+```ts
+tagged error NotFound {
+  id: string
+}
+tagged error RateLimited {}
+```
+
+→ `class NotFound extends Data.TaggedError("NotFound")<{ id: string }> {}` (and
+`<{}>` for the empty body). `Data` is auto-imported (§1.2). `export` is allowed.
+Use sites are plain Effect: `raise new NotFound({ id })`, `catch { NotFound as e >> ... }`.
+
 ## 6. Error handling: postfix `catch` arms
 
 Error handling attaches **directly to the effect being run**, as a postfix `catch`
@@ -311,6 +329,24 @@ Modifiers and clauses:
 
 No dedicated statement — use the pipeline operator (§10):
 `program |> Effect.provide(MainLive) |> Effect.runPromise`.
+
+### 7.4 `schema` declaration
+
+Declares an effect Schema class. Fields are **expressions** (schema values),
+newline-separated with optional commas:
+
+```ts
+schema Person {
+  name: Schema.String
+  age:  Schema.Number
+}
+```
+
+→ `class Person extends Schema.Class<Person>("Person")({ name: Schema.String, age: Schema.Number }) {}`.
+
+`Person` is simultaneously a class (`new Person({ name, age })`), the instance
+type, and a schema (`Schema.decodeUnknown(Person)`). `Schema` is auto-imported
+(§1.2). `export` is allowed.
 
 ## 8. Resources and finalization
 

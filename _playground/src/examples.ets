@@ -2,9 +2,9 @@
 // the rest live in public/examples/ and are fetched on demand.
 import { decodeSourceFromHash } from "./state/share"
 
-export const DEFAULT_SOURCE = `import { Data } from "effect";
-
-class NotFound extends Data.TaggedError("NotFound")<{ id: string }> {}
+export const DEFAULT_SOURCE = `tagged error NotFound {
+  id: string
+}
 
 service Greeter {
   greeting: Effect.Effect<string>

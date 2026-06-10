@@ -2,9 +2,9 @@
 // `effect` npm package. See docs/effectscript/ for the full language docs,
 // and testdata/tests/cases/effectscript/integration/quickstart.ets for the
 // complete kitchen-sink program.
-import { Data } from "effect";
-
-class NotFound extends Data.TaggedError("NotFound")<{ id: string }> {}
+tagged error NotFound {
+  id: string
+}
 
 service Greeter {
   greeting: Effect.Effect<string>
