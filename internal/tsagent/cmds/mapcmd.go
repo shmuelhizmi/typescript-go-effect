@@ -8,8 +8,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/microsoft/typescript-go/internal/ast"
 	"github.com/microsoft/typescript-go/internal/astnav"
@@ -36,10 +34,16 @@ func init() {
 			fs.StringVar(&f.kind, "kind", "", "comma-separated kind filter (class,interface,function,...)")
 			fs.StringVar(&f.detail, "detail", "signatures", "detail level: names (no signatures), signatures, or full (adds the first JSDoc line)")
 			fs.BoolVar(&f.withRefCounts, "with-ref-counts", false, "with --detail full, add approximate reference counts for top-level exported symbols (identifier-occurrence prefilter; expensive)")
+			fs.BoolVar(&f.locals, "locals", false, "descend into function bodies and list local declarations")
+			fs.StringVar(&f.symbol, "symbol", "", "print only this symbol's subtree (mutually exclusive with path arguments; implies --locals within the subtree)")
 			return f
 		},
 		Run: func(ctx context.Context, ws *core.Workspace, flags any, args []string) (any, error) {
-			return runMapOutline(ctx, ws, flags.(*outlineFlags), args)
+			f := flags.(*outlineFlags)
+			if f.symbol != "" {
+				return runMapOutlineSymbol(ctx, ws, f, args)
+			}
+			return runMapOutline(ctx, ws, f, args)
 		},
 	})
 	cli.Register(cli.Command{
@@ -143,6 +147,8 @@ type outlineFlags struct {
 	kind          string
 	detail        string
 	withRefCounts bool
+	locals        bool
+	symbol        string
 }
 
 // OutlineEntry is one node in the symbol tree.
@@ -261,6 +267,7 @@ func runMapOutline(ctx context.Context, ws *core.Workspace, flags *outlineFlags,
 			kindFilter:   kindFilter,
 			exportedOnly: flags.exportedOnly,
 			detail:       flags.detail,
+			locals:       flags.locals,
 		}
 		entries := walker.entriesForStatements(file.Statements.Nodes, 1)
 		done()
@@ -268,6 +275,103 @@ func runMapOutline(ctx context.Context, ws *core.Workspace, flags *outlineFlags,
 	}
 	if flags.detail == "full" && flags.withRefCounts {
 		addApproxRefCounts(ws, result)
+	}
+	return result, nil
+}
+
+// SymbolOutline is the `map outline --symbol` result: a single symbol's
+// subtree (members for class-likes, scope-local declarations for
+// function-likes).
+type SymbolOutline struct {
+	SymbolID  string          `json:"symbolId"`
+	Name      string          `json:"name"`
+	Kind      string          `json:"kind"`
+	File      string          `json:"file"`
+	Line      int             `json:"line"`
+	EndLine   int             `json:"endLine"`
+	Signature string          `json:"signature,omitempty"`
+	Entries   []*OutlineEntry `json:"entries"`
+}
+
+var _ cli.Texter = (*SymbolOutline)(nil)
+
+func (r *SymbolOutline) WriteText(w io.Writer) error {
+	if _, err := fmt.Fprintf(w, "%s  %s  (%d-%d)\n", r.SymbolID, r.Kind, r.Line, r.EndLine); err != nil {
+		return err
+	}
+	return writeOutlineEntriesText(w, r.Entries, 1)
+}
+
+func runMapOutlineSymbol(ctx context.Context, ws *core.Workspace, flags *outlineFlags, args []string) (*SymbolOutline, error) {
+	if len(args) > 0 {
+		return nil, cli.UsageErrorf("--symbol cannot be combined with path arguments")
+	}
+	if flags.withRefCounts {
+		return nil, cli.UsageErrorf("--with-ref-counts cannot be combined with --symbol")
+	}
+	maxDepth, err := parseDepth(flags.depth)
+	if err != nil {
+		return nil, err
+	}
+	switch flags.detail {
+	case "", "names", "signatures", "full":
+	default:
+		return nil, cli.UsageErrorf("invalid --detail %q (want names, signatures, or full)", flags.detail)
+	}
+	_, decl, err := core.DecodeSymbolID(ctx, ws, flags.symbol)
+	if err != nil {
+		return nil, err
+	}
+	if decl == nil {
+		return nil, cli.NotFoundErrorf("symbol %s has no declaration", flags.symbol)
+	}
+	file := ast.GetSourceFileOfNode(decl)
+	binder.BindSourceFile(file)
+	fileChecker, done := ws.Program.GetTypeCheckerForFile(ctx, file)
+	defer done()
+	walker := &outlineWalker{
+		ws:           ws,
+		checker:      fileChecker,
+		file:         file,
+		maxDepth:     maxDepth,
+		kindFilter:   cli.CommaSet(flags.kind),
+		exportedOnly: flags.exportedOnly,
+		detail:       flags.detail,
+		locals:       true, // --symbol implies locals within the subtree
+	}
+	var entries []*OutlineEntry
+	switch decl.Kind {
+	case ast.KindClassDeclaration, ast.KindInterfaceDeclaration:
+		entries = walker.memberEntries(decl.Members(), 1)
+	case ast.KindEnumDeclaration:
+		entries = walker.memberEntries(decl.AsEnumDeclaration().Members.Nodes, 1)
+	case ast.KindModuleDeclaration:
+		if body := decl.Body(); body != nil && body.Kind == ast.KindModuleBlock && walker.withinDepth(1) {
+			entries = walker.entriesForStatements(body.AsModuleBlock().Statements.Nodes, 1)
+		}
+	default:
+		entries = walker.scopeChildEntries(decl, 1)
+	}
+
+	kind := core.DeclarationKind(decl)
+	name := ast.GetDeclarationName(decl)
+	if name == "" && decl.Kind == ast.KindConstructor {
+		name = "constructor"
+	}
+	start := astnav.GetStartOfNode(decl, file, false /*includeJSDoc*/)
+	line, _ := ws.PosToLineCol(file, start)
+	endLine, _ := ws.PosToLineCol(file, decl.End())
+	result := &SymbolOutline{
+		SymbolID: core.EncodeDeclID(ws, decl),
+		Name:     name,
+		Kind:     kind,
+		File:     ws.RelPath(file.FileName()),
+		Line:     line,
+		EndLine:  endLine,
+		Entries:  entries,
+	}
+	if flags.detail != "names" {
+		result.Signature = walker.signature(decl, kind)
 	}
 	return result, nil
 }
@@ -331,6 +435,7 @@ type outlineWalker struct {
 	kindFilter   map[string]bool
 	exportedOnly bool
 	detail       string // names | signatures | full ("" = signatures)
+	locals       bool   // descend into function bodies (--locals)
 }
 
 func (w *outlineWalker) entriesForStatements(statements []*ast.Node, depth int) []*OutlineEntry {
@@ -339,12 +444,12 @@ func (w *outlineWalker) entriesForStatements(statements []*ast.Node, depth int) 
 		switch statement.Kind {
 		case ast.KindVariableStatement:
 			for _, decl := range statement.AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes {
-				if e := w.entry(decl, depth, nil); e != nil {
+				if e := w.entry(decl, depth, w.scopeChildEntries(decl, depth+1)); e != nil {
 					entries = append(entries, e)
 				}
 			}
 		case ast.KindFunctionDeclaration, ast.KindTypeAliasDeclaration:
-			if e := w.entry(statement, depth, nil); e != nil {
+			if e := w.entry(statement, depth, w.scopeChildEntries(statement, depth+1)); e != nil {
 				entries = append(entries, e)
 			}
 		case ast.KindClassDeclaration, ast.KindInterfaceDeclaration:
@@ -378,12 +483,41 @@ func (w *outlineWalker) memberEntries(members []*ast.Node, depth int) []*Outline
 		case ast.KindMethodDeclaration, ast.KindMethodSignature, ast.KindPropertyDeclaration,
 			ast.KindPropertySignature, ast.KindConstructor, ast.KindGetAccessor, ast.KindSetAccessor,
 			ast.KindEnumMember:
-			if e := w.memberEntry(member); e != nil {
+			if e := w.memberEntry(member, depth); e != nil {
 				entries = append(entries, e)
 			}
 		}
 	}
 	return entries
+}
+
+// scopeChildEntries lists a scope container's local declarations (--locals).
+// It returns nil when locals are off or the node is not a scope container
+// (plain variables, type aliases, ...), keeping the default output unchanged.
+func (w *outlineWalker) scopeChildEntries(node *ast.Node, depth int) []*OutlineEntry {
+	if !w.locals || !w.withinDepth(depth) {
+		return nil
+	}
+	var entries []*OutlineEntry
+	for _, decl := range core.ScopeDeclarations(node) {
+		if e := w.entry(decl, depth, w.localChildEntries(decl, depth+1)); e != nil {
+			entries = append(entries, e)
+		}
+	}
+	return entries
+}
+
+// localChildEntries returns the nested entries of a local declaration that
+// is itself a container: class-likes get member entries, scope containers
+// (local functions, named arrows) get their own locals.
+func (w *outlineWalker) localChildEntries(decl *ast.Node, depth int) []*OutlineEntry {
+	switch decl.Kind {
+	case ast.KindClassDeclaration, ast.KindInterfaceDeclaration:
+		return w.memberEntries(decl.Members(), depth)
+	case ast.KindEnumDeclaration:
+		return w.memberEntries(decl.AsEnumDeclaration().Members.Nodes, depth)
+	}
+	return w.scopeChildEntries(decl, depth)
 }
 
 func (w *outlineWalker) withinDepth(depth int) bool {
@@ -413,8 +547,12 @@ func (w *outlineWalker) entry(node *ast.Node, depth int, children []*OutlineEntr
 	return e
 }
 
-func (w *outlineWalker) memberEntry(node *ast.Node) *OutlineEntry {
-	return w.newEntry(node, core.DeclarationKind(node))
+func (w *outlineWalker) memberEntry(node *ast.Node, depth int) *OutlineEntry {
+	e := w.newEntry(node, core.DeclarationKind(node))
+	if e != nil {
+		e.Children = w.scopeChildEntries(node, depth+1)
+	}
+	return e
 }
 
 func (w *outlineWalker) newEntry(node *ast.Node, kind string) *OutlineEntry {
@@ -432,7 +570,7 @@ func (w *outlineWalker) newEntry(node *ast.Node, kind string) *OutlineEntry {
 	e := &OutlineEntry{
 		Name:     name,
 		Kind:     kind,
-		SymbolID: core.EncodeSymbolID(w.ws, node.Symbol()),
+		SymbolID: core.EncodeDeclID(w.ws, node),
 		Line:     line,
 		EndLine:  endLine,
 	}
@@ -512,28 +650,6 @@ func (r *SearchResult) WriteItemText(w io.Writer, item any) error {
 	return err
 }
 
-// fuzzyMatchScore matches s against pattern: every pattern rune must appear
-// in order; upper-case pattern runes match exactly. Returns the number of
-// skipped runes, or -1 when s does not match.
-func fuzzyMatchScore(s string, pattern string) int {
-	score := 0
-	for _, p := range pattern {
-		exact := unicode.IsUpper(p)
-		for {
-			c, size := utf8.DecodeRuneInString(s)
-			if size == 0 {
-				return -1
-			}
-			s = s[size:]
-			if exact && c == p || !exact && unicode.ToLower(c) == unicode.ToLower(p) {
-				break
-			}
-			score++
-		}
-	}
-	return score
-}
-
 func runMapSearch(ctx context.Context, ws *core.Workspace, flags *searchFlags, args []string) (*SearchResult, error) {
 	if len(args) != 1 {
 		return nil, cli.UsageErrorf("map search takes exactly one query argument")
@@ -558,7 +674,7 @@ func runMapSearch(ctx context.Context, ws *core.Workspace, flags *searchFlags, a
 		}
 		bound := false
 		for name, declarations := range file.GetDeclarationMap() {
-			score := fuzzyMatchScore(name, query)
+			score := core.FuzzyMatchScore(name, query)
 			if score < 0 {
 				continue
 			}

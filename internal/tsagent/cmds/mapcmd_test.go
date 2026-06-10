@@ -2,6 +2,8 @@ package cmds
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -413,5 +415,247 @@ func TestMapOutlineDetailFull(t *testing.T) {
 	// --with-ref-counts without --detail full is a usage error.
 	if _, err := runMapOutline(ctx, ws, &outlineFlags{depth: "all", withRefCounts: true}, nil); err == nil {
 		t.Error("expected usage error for --with-ref-counts without --detail full")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// map outline --locals / --symbol
+
+const serverSource = `function createApp(): { listen(port: number): string } {
+	return { listen: (port) => "listening:" + port };
+}
+const isDev = true;
+
+/** Starts the http server. */
+export function startServer(port: number): string {
+	const app = createApp();
+	function logRequest(req: string): void { const tag = req; }
+	if (isDev) { const banner = "dev mode"; }
+	return app.listen(port);
+}
+
+export interface Route { path: string }
+
+export class Router {
+	routes: Route[] = [];
+	add(route: Route): string { const key = route.path; this.routes.push(route); return key; }
+}
+
+const handler = (req: string): number => {
+	function parse(body: string): number { return body.length; }
+	return parse(req);
+};
+`
+
+func localsTestFiles() map[string]any {
+	return map[string]any{"/project/src/server.ts": serverSource}
+}
+
+func outlineText(t *testing.T, result *OutlineResult) string {
+	t.Helper()
+	var sb strings.Builder
+	for i := range result.Files {
+		if err := result.WriteItemText(&sb, result.Item(i)); err != nil {
+			t.Fatalf("WriteItemText: %v", err)
+		}
+	}
+	return sb.String()
+}
+
+func TestMapOutlineDefaultUnchangedByLocalsSupport(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, localsTestFiles())
+	result, err := runMapOutline(context.Background(), ws, &outlineFlags{depth: "all"}, nil)
+	if err != nil {
+		t.Fatalf("runMapOutline: %v", err)
+	}
+	server := findFileOutline(t, result, "src/server.ts")
+
+	// Without --locals no function entry has children and no local appears.
+	if e := findEntry(server.Entries, "startServer"); e == nil || len(e.Children) != 0 {
+		t.Errorf("default outline must not descend into function bodies, got %+v", e)
+	}
+	if add := findEntry(findEntry(server.Entries, "Router").Children, "add"); add == nil || len(add.Children) != 0 {
+		t.Errorf("default outline must not descend into method bodies, got %+v", add)
+	}
+	text := outlineText(t, result)
+	for _, local := range []string{"app", "logRequest", "banner", "key", "parse", "tag"} {
+		if strings.Contains(text, " "+local+" ") {
+			t.Errorf("default text output leaked local %q:\n%s", local, text)
+		}
+	}
+	// Top-level and member symbol IDs are unchanged.
+	if e := findEntry(server.Entries, "startServer"); e.SymbolID != "src/server.ts#startServer" {
+		t.Errorf("startServer symbolId = %q", e.SymbolID)
+	}
+	if e := findEntry(findEntry(server.Entries, "Router").Children, "add"); e.SymbolID != "src/server.ts#Router.add" {
+		t.Errorf("Router.add symbolId = %q", e.SymbolID)
+	}
+}
+
+func TestMapOutlineLocals(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, localsTestFiles())
+	result, err := runMapOutline(context.Background(), ws, &outlineFlags{depth: "all", locals: true}, nil)
+	if err != nil {
+		t.Fatalf("runMapOutline --locals: %v", err)
+	}
+	server := findFileOutline(t, result, "src/server.ts")
+
+	start := findEntry(server.Entries, "startServer")
+	if start == nil {
+		t.Fatal("missing startServer entry")
+	}
+	wantChildren := []struct {
+		name, kind, id string
+	}{
+		{"app", "const", "src/server.ts#startServer.app"},
+		{"logRequest", "function", "src/server.ts#startServer.logRequest"},
+		{"banner", "const", "src/server.ts#startServer.banner"},
+	}
+	if len(start.Children) != len(wantChildren) {
+		t.Fatalf("startServer children = %d, want %d (%+v)", len(start.Children), len(wantChildren), start.Children)
+	}
+	for i, want := range wantChildren {
+		got := start.Children[i]
+		if got.Name != want.name || got.Kind != want.kind || got.SymbolID != want.id {
+			t.Errorf("startServer child %d = %s/%s/%s, want %s/%s/%s",
+				i, got.Kind, got.Name, got.SymbolID, want.kind, want.name, want.id)
+		}
+		if got.Exported {
+			t.Errorf("local %s must not be exported", got.Name)
+		}
+	}
+	// A local function's own locals appear one level deeper.
+	logRequest := findEntry(start.Children, "logRequest")
+	if tag := findEntry(logRequest.Children, "tag"); tag == nil || tag.SymbolID != "src/server.ts#startServer.logRequest.tag" {
+		t.Errorf("logRequest.tag = %+v, want nested symbol id", tag)
+	}
+
+	// Method locals.
+	add := findEntry(findEntry(server.Entries, "Router").Children, "add")
+	if key := findEntry(add.Children, "key"); key == nil || key.SymbolID != "src/server.ts#Router.add.key" {
+		t.Errorf("Router.add.key = %+v, want src/server.ts#Router.add.key", key)
+	}
+
+	// Named-arrow const declarator scopes.
+	handlerEntry := findEntry(server.Entries, "handler")
+	if parse := findEntry(handlerEntry.Children, "parse"); parse == nil || parse.SymbolID != "src/server.ts#handler.parse" {
+		t.Errorf("handler.parse = %+v, want src/server.ts#handler.parse", parse)
+	}
+}
+
+func TestMapOutlineLocalsDepth(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, localsTestFiles())
+	ctx := context.Background()
+
+	// depth 1 keeps the top level only: no locals at all.
+	result, err := runMapOutline(ctx, ws, &outlineFlags{depth: "1", locals: true}, nil)
+	if err != nil {
+		t.Fatalf("runMapOutline: %v", err)
+	}
+	server := findFileOutline(t, result, "src/server.ts")
+	if e := findEntry(server.Entries, "startServer"); len(e.Children) != 0 {
+		t.Errorf("depth=1 must drop locals, got %+v", e.Children)
+	}
+
+	// depth 2 keeps direct locals but not their nested locals.
+	result, err = runMapOutline(ctx, ws, &outlineFlags{depth: "2", locals: true}, nil)
+	if err != nil {
+		t.Fatalf("runMapOutline: %v", err)
+	}
+	server = findFileOutline(t, result, "src/server.ts")
+	start := findEntry(server.Entries, "startServer")
+	if len(start.Children) == 0 {
+		t.Fatal("depth=2 should keep direct locals")
+	}
+	if logRequest := findEntry(start.Children, "logRequest"); len(logRequest.Children) != 0 {
+		t.Errorf("depth=2 must drop nested locals, got %+v", logRequest.Children)
+	}
+}
+
+func TestMapOutlineSymbolFunction(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, localsTestFiles())
+	// --symbol implies locals for the subtree even without --locals.
+	result, err := runMapOutlineSymbol(context.Background(), ws, &outlineFlags{depth: "all", symbol: "src/server.ts#startServer"}, nil)
+	if err != nil {
+		t.Fatalf("runMapOutlineSymbol: %v", err)
+	}
+	if result.SymbolID != "src/server.ts#startServer" || result.Kind != "function" || result.Name != "startServer" {
+		t.Errorf("header = %s/%s/%s", result.SymbolID, result.Kind, result.Name)
+	}
+	var names []string
+	for _, e := range result.Entries {
+		names = append(names, e.Name)
+	}
+	if want := []string{"app", "logRequest", "banner"}; !slices.Equal(names, want) {
+		t.Errorf("entries = %v, want %v", names, want)
+	}
+	var sb strings.Builder
+	if err := result.WriteText(&sb); err != nil {
+		t.Fatalf("WriteText: %v", err)
+	}
+	text := sb.String()
+	if !strings.HasPrefix(text, fmt.Sprintf("src/server.ts#startServer  function  (%d-%d)\n", result.Line, result.EndLine)) {
+		t.Errorf("text header mismatch:\n%s", text)
+	}
+	if !strings.Contains(text, "function logRequest") {
+		t.Errorf("text body missing locals:\n%s", text)
+	}
+}
+
+func TestMapOutlineSymbolClass(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, localsTestFiles())
+	result, err := runMapOutlineSymbol(context.Background(), ws, &outlineFlags{depth: "all", symbol: "src/server.ts#Router"}, nil)
+	if err != nil {
+		t.Fatalf("runMapOutlineSymbol: %v", err)
+	}
+	if result.Kind != "class" {
+		t.Errorf("kind = %q, want class", result.Kind)
+	}
+	routes := findEntry(result.Entries, "routes")
+	if routes == nil || routes.Kind != "property" {
+		t.Errorf("routes = %+v, want property member", routes)
+	}
+	add := findEntry(result.Entries, "add")
+	if add == nil || add.Kind != "method" {
+		t.Fatalf("add = %+v, want method member", add)
+	}
+	// --symbol implies locals: the method's locals are included.
+	if key := findEntry(add.Children, "key"); key == nil || key.SymbolID != "src/server.ts#Router.add.key" {
+		t.Errorf("add.key = %+v, want src/server.ts#Router.add.key", key)
+	}
+}
+
+func TestMapOutlineSymbolDepth(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, localsTestFiles())
+	result, err := runMapOutlineSymbol(context.Background(), ws, &outlineFlags{depth: "1", symbol: "src/server.ts#startServer"}, nil)
+	if err != nil {
+		t.Fatalf("runMapOutlineSymbol: %v", err)
+	}
+	if len(result.Entries) == 0 {
+		t.Fatal("depth=1 should keep the symbol's direct children")
+	}
+	if logRequest := findEntry(result.Entries, "logRequest"); logRequest == nil || len(logRequest.Children) != 0 {
+		t.Errorf("depth=1 must drop the locals of nested functions, got %+v", logRequest)
+	}
+}
+
+func TestMapOutlineSymbolUsageErrors(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, localsTestFiles())
+	ctx := context.Background()
+	if _, err := runMapOutlineSymbol(ctx, ws, &outlineFlags{depth: "all", symbol: "src/server.ts#startServer"}, []string{"src/server.ts"}); err == nil {
+		t.Error("expected usage error for --symbol with path arguments")
+	}
+	if _, err := runMapOutlineSymbol(ctx, ws, &outlineFlags{depth: "all", detail: "full", withRefCounts: true, symbol: "src/server.ts#startServer"}, nil); err == nil {
+		t.Error("expected usage error for --symbol with --with-ref-counts")
+	}
+	if _, err := runMapOutlineSymbol(ctx, ws, &outlineFlags{depth: "all", symbol: "src/server.ts#noSuchThing"}, nil); err == nil {
+		t.Error("expected not-found error for unknown --symbol")
 	}
 }
