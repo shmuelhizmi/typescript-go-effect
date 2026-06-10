@@ -103,3 +103,31 @@ known v0 deviations.
 4. **Checked after desugaring.** The standard checker type-checks the desugared
    program, so inference of the `A`, `E`, `R` channels is exactly Effect's own —
    plus dedicated diagnostics for misused EffectScript constructs.
+
+## Migrating existing code: `tsgo --effectify`
+
+The compiler ships a reverse-direction codemod that rewrites classic
+effect-library TypeScript into EffectScript syntax:
+
+```sh
+tsgo --effectify "src/**/*.ts"            # dry run: prints a diff per file
+tsgo --effectify --write "src/**/*.ts"    # writes foo.ets and removes foo.ts
+tsgo --effectify --check "src/**/*.ts"    # CI mode: exit 1 if anything would convert
+```
+
+It inverts the rules in [TRANSPILATION.md](./TRANSPILATION.md):
+`Effect.gen`/`Effect.fn` become `effect` blocks and declarations, `yield*`
+becomes `<-` binds, `Effect.fail` becomes `raise`, `Context.Tag` classes become
+`service`, `Layer.effect/scoped/succeed` become `layer` declarations,
+catch/`Match` pipe chains become postfix `catch` arms and `match` expressions,
+`pipe(a, f)` becomes `a |> f`, and `Effect.Effect<A, E, R>` annotations become
+`A raises E requires R` where they read well.
+
+The migration is conservative by construction: EffectScript is a strict
+superset of TypeScript, so any shape the tool does not confidently recognize is
+left verbatim. Every converted file is verified before it is reported — the
+output is re-parsed as EffectScript (which runs the forward desugarer) and the
+result must be structurally equivalent to the original program; files that fail
+verification are skipped wholesale and reported with a reason. Implementation
+lives in `internal/effectify/`, with a golden corpus under
+`testdata/tests/cases/effectscript/effectify/`.

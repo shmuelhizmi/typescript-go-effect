@@ -20,6 +20,8 @@ func runMain() int {
 			return runLSP(args[1:])
 		case "--api":
 			return runAPI(args[1:])
+		case "--effectify":
+			return runEffectify(args[1:])
 		}
 	}
 	result := execute.CommandLine(newSystem(), args, nil)
