@@ -4,6 +4,8 @@ Resolving in CJS mode with conditions 'import', 'types'.
 Loading module as file / folder, candidate module location '/dir', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/dir.ts' does not exist.
 File '/dir.tsx' does not exist.
+File '/dir.ets' does not exist.
+File '/dir.etsx' does not exist.
 File '/dir.d.ts' does not exist.
 File '/dir.js' does not exist.
 File '/dir.jsx' does not exist.
@@ -36,6 +38,8 @@ Resolving in CJS mode with conditions 'import', 'types'.
 Loading module as file / folder, candidate module location '/redirect', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/redirect.ts' does not exist.
 File '/redirect.tsx' does not exist.
+File '/redirect.ets' does not exist.
+File '/redirect.etsx' does not exist.
 File '/redirect.d.ts' does not exist.
 File '/redirect.js' does not exist.
 File '/redirect.jsx' does not exist.
@@ -47,6 +51,8 @@ Found 'package.json' at '/redirect/package.json'.
 Loading module as file / folder, candidate module location '/foo', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/foo.ts' does not exist.
 File '/foo.tsx' does not exist.
+File '/foo.ets' does not exist.
+File '/foo.etsx' does not exist.
 File '/foo.d.ts' does not exist.
 File '/foo.js' does not exist.
 File '/foo.jsx' does not exist.
@@ -58,6 +64,8 @@ Resolving in CJS mode with conditions 'import', 'types'.
 Loading module as file / folder, candidate module location '/redirect/index', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/redirect/index.ts' does not exist.
 File '/redirect/index.tsx' does not exist.
+File '/redirect/index.ets' does not exist.
+File '/redirect/index.etsx' does not exist.
 File '/redirect/index.d.ts' does not exist.
 File '/redirect/index.js' does not exist.
 File '/redirect/index.jsx' does not exist.
@@ -69,6 +77,8 @@ Resolving in CJS mode with conditions 'import', 'types'.
 Loading module as file / folder, candidate module location '/types/esm', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/types/esm.ts' does not exist.
 File '/types/esm.tsx' does not exist.
+File '/types/esm.ets' does not exist.
+File '/types/esm.etsx' does not exist.
 File '/types/esm.d.ts' exists - use it as a name resolution result.
 ======== Module name './types/esm' was successfully resolved to '/types/esm.d.ts'. ========
 ======== Resolving module './types/esm' from '/main.ts'. ========
@@ -77,6 +87,8 @@ Resolving in CJS mode with conditions 'import', 'types'.
 Loading module as file / folder, candidate module location '/types/esm', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/types/esm.ts' does not exist according to earlier cached lookups.
 File '/types/esm.tsx' does not exist according to earlier cached lookups.
+File '/types/esm.ets' does not exist according to earlier cached lookups.
+File '/types/esm.etsx' does not exist according to earlier cached lookups.
 File '/types/esm.d.ts' exists - use it as a name resolution result.
 ======== Module name './types/esm' was successfully resolved to '/types/esm.d.ts'. ========
 ======== Resolving module './types/cjs' from '/main.ts'. ========
@@ -85,6 +97,8 @@ Resolving in CJS mode with conditions 'import', 'types'.
 Loading module as file / folder, candidate module location '/types/cjs', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/types/cjs.ts' does not exist.
 File '/types/cjs.tsx' does not exist.
+File '/types/cjs.ets' does not exist.
+File '/types/cjs.etsx' does not exist.
 File '/types/cjs.d.ts' exists - use it as a name resolution result.
 ======== Module name './types/cjs' was successfully resolved to '/types/cjs.d.ts'. ========
 ======== Resolving module './types/cjs' from '/main.ts'. ========
@@ -93,5 +107,7 @@ Resolving in CJS mode with conditions 'import', 'types'.
 Loading module as file / folder, candidate module location '/types/cjs', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/types/cjs.ts' does not exist according to earlier cached lookups.
 File '/types/cjs.tsx' does not exist according to earlier cached lookups.
+File '/types/cjs.ets' does not exist according to earlier cached lookups.
+File '/types/cjs.etsx' does not exist according to earlier cached lookups.
 File '/types/cjs.d.ts' exists - use it as a name resolution result.
 ======== Module name './types/cjs' was successfully resolved to '/types/cjs.d.ts'. ========

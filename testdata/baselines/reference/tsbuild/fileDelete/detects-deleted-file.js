@@ -293,6 +293,8 @@ Resolving in CJS mode with conditions 'import', 'types'.
 Loading module as file / folder, candidate module location '/home/src/workspaces/solution/child/child2', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/home/src/workspaces/solution/child/child2.ts' does not exist.
 File '/home/src/workspaces/solution/child/child2.tsx' does not exist.
+File '/home/src/workspaces/solution/child/child2.ets' does not exist.
+File '/home/src/workspaces/solution/child/child2.etsx' does not exist.
 File '/home/src/workspaces/solution/child/child2.d.ts' does not exist.
 File '/home/src/workspaces/solution/child/child2.js' does not exist.
 File '/home/src/workspaces/solution/child/child2.jsx' does not exist.

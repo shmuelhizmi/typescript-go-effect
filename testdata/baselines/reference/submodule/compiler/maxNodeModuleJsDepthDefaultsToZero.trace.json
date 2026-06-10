@@ -7,9 +7,13 @@ Searching all ancestor node_modules directories for preferred extensions: TypeSc
 File '/node_modules/shortid/package.json' does not exist.
 File '/node_modules/shortid.ts' does not exist.
 File '/node_modules/shortid.tsx' does not exist.
+File '/node_modules/shortid.ets' does not exist.
+File '/node_modules/shortid.etsx' does not exist.
 File '/node_modules/shortid.d.ts' does not exist.
 File '/node_modules/shortid/index.ts' does not exist.
 File '/node_modules/shortid/index.tsx' does not exist.
+File '/node_modules/shortid/index.ets' does not exist.
+File '/node_modules/shortid/index.etsx' does not exist.
 File '/node_modules/shortid/index.d.ts' does not exist.
 Directory '/node_modules/@types' does not exist, skipping all lookups in it.
 Searching all ancestor node_modules directories for fallback extensions: JavaScript, JSON.

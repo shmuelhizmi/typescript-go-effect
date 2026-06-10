@@ -76,6 +76,8 @@ Resolving in CJS mode with conditions 'require', 'types', 'node'.
 Loading module as file / folder, candidate module location '/home/src/workspaces/project/producer/in-js', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/home/src/workspaces/project/producer/in-js.ts' does not exist.
 File '/home/src/workspaces/project/producer/in-js.tsx' does not exist.
+File '/home/src/workspaces/project/producer/in-js.ets' does not exist.
+File '/home/src/workspaces/project/producer/in-js.etsx' does not exist.
 File '/home/src/workspaces/project/producer/in-js.d.ts' exists - use it as a name resolution result.
 ======== Module name './in-js' was successfully resolved to '/home/src/workspaces/project/producer/in-js.d.ts'. ========
 ======== Resolving module '@common' from '/home/src/workspaces/project/producer/index.ts'. ========
@@ -106,6 +108,8 @@ Resolving in CJS mode with conditions 'require', 'types', 'node'.
 Loading module as file / folder, candidate module location '/home/src/workspaces/project/producer/in-js', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/home/src/workspaces/project/producer/in-js.ts' does not exist.
 File '/home/src/workspaces/project/producer/in-js.tsx' does not exist.
+File '/home/src/workspaces/project/producer/in-js.ets' does not exist.
+File '/home/src/workspaces/project/producer/in-js.etsx' does not exist.
 File '/home/src/workspaces/project/producer/in-js.d.ts' exists - use it as a name resolution result.
 ======== Module name './in-js' was successfully resolved to '/home/src/workspaces/project/producer/in-js.d.ts'. ========
 ======== Resolving module '@common' from '/home/src/workspaces/project/producer/index.ts'. ========

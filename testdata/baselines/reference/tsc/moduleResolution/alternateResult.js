@@ -232,14 +232,20 @@ File '/home/src/projects/project/node_modules/bar/package.json' exists according
 File name '/home/src/projects/project/node_modules/bar/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.d.ts' does not exist.
 Loading module as file / folder, candidate module location '/home/src/projects/project/node_modules/bar/index.js', target file types: TypeScript, Declaration.
 File name '/home/src/projects/project/node_modules/bar/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar/index.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar/index.tsx' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar/index.ets' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar/index.etsx' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar/index.js.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.js.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.js.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.js.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.js.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/bar/index.js' does not exist, skipping all lookups in it.
 File '/home/src/projects/project/node_modules/@types/bar/package.json' exists according to earlier cached lookups.
@@ -591,14 +597,20 @@ File '/home/src/projects/project/node_modules/bar/package.json' exists according
 File name '/home/src/projects/project/node_modules/bar/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.d.ts' does not exist.
 Loading module as file / folder, candidate module location '/home/src/projects/project/node_modules/bar/index.js', target file types: TypeScript, Declaration.
 File name '/home/src/projects/project/node_modules/bar/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar/index.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar/index.tsx' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar/index.ets' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar/index.etsx' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar/index.js.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.js.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.js.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.js.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.js.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/bar/index.js' does not exist, skipping all lookups in it.
 File '/home/src/projects/project/node_modules/@types/bar/package.json' exists according to earlier cached lookups.
@@ -610,9 +622,13 @@ Loading module as file / folder, candidate module location '/home/src/projects/p
 File name '/home/src/projects/project/node_modules/@types/bar/index.d.ts' has a '.d.ts' extension - stripping it.
 File '/home/src/projects/project/node_modules/@types/bar/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/@types/bar/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/@types/bar/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/@types/bar/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/@types/bar/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/@types/bar/index.d.ts.ts' does not exist.
 File '/home/src/projects/project/node_modules/@types/bar/index.d.ts.tsx' does not exist.
+File '/home/src/projects/project/node_modules/@types/bar/index.d.ts.ets' does not exist.
+File '/home/src/projects/project/node_modules/@types/bar/index.d.ts.etsx' does not exist.
 File '/home/src/projects/project/node_modules/@types/bar/index.d.ts.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/@types/bar/index.d.ts' does not exist, skipping all lookups in it.
 Directory '/home/src/projects/node_modules' does not exist, skipping all lookups in it.
@@ -749,9 +765,13 @@ Loading module as file / folder, candidate module location '/home/src/projects/p
 File name '/home/src/projects/project/node_modules/foo/index.d.ts' has a '.d.ts' extension - stripping it.
 File '/home/src/projects/project/node_modules/foo/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/foo/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/foo/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/foo/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/foo/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/foo/index.d.ts.ts' does not exist.
 File '/home/src/projects/project/node_modules/foo/index.d.ts.tsx' does not exist.
+File '/home/src/projects/project/node_modules/foo/index.d.ts.ets' does not exist.
+File '/home/src/projects/project/node_modules/foo/index.d.ts.etsx' does not exist.
 File '/home/src/projects/project/node_modules/foo/index.d.ts.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/foo/index.d.ts' does not exist, skipping all lookups in it.
 Directory '/home/src/projects/node_modules' does not exist, skipping all lookups in it.
@@ -814,14 +834,20 @@ File '/home/src/projects/project/node_modules/bar/package.json' exists according
 File name '/home/src/projects/project/node_modules/bar/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.d.ts' does not exist.
 Loading module as file / folder, candidate module location '/home/src/projects/project/node_modules/bar/index.js', target file types: TypeScript, Declaration.
 File name '/home/src/projects/project/node_modules/bar/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar/index.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar/index.tsx' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar/index.ets' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar/index.etsx' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar/index.js.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.js.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.js.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.js.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.js.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/bar/index.js' does not exist, skipping all lookups in it.
 File '/home/src/projects/project/node_modules/@types/bar/package.json' exists according to earlier cached lookups.
@@ -833,9 +859,13 @@ Loading module as file / folder, candidate module location '/home/src/projects/p
 File name '/home/src/projects/project/node_modules/@types/bar/index.d.ts' has a '.d.ts' extension - stripping it.
 File '/home/src/projects/project/node_modules/@types/bar/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/@types/bar/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/@types/bar/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/@types/bar/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/@types/bar/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/@types/bar/index.d.ts.ts' does not exist.
 File '/home/src/projects/project/node_modules/@types/bar/index.d.ts.tsx' does not exist.
+File '/home/src/projects/project/node_modules/@types/bar/index.d.ts.ets' does not exist.
+File '/home/src/projects/project/node_modules/@types/bar/index.d.ts.etsx' does not exist.
 File '/home/src/projects/project/node_modules/@types/bar/index.d.ts.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/@types/bar/index.d.ts' does not exist, skipping all lookups in it.
 Directory '/home/src/projects/node_modules' does not exist, skipping all lookups in it.
@@ -973,9 +1003,13 @@ Loading module as file / folder, candidate module location '/home/src/projects/p
 File name '/home/src/projects/project/node_modules/foo/index.d.ts' has a '.d.ts' extension - stripping it.
 File '/home/src/projects/project/node_modules/foo/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/foo/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/foo/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/foo/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/foo/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/foo/index.d.ts.ts' does not exist.
 File '/home/src/projects/project/node_modules/foo/index.d.ts.tsx' does not exist.
+File '/home/src/projects/project/node_modules/foo/index.d.ts.ets' does not exist.
+File '/home/src/projects/project/node_modules/foo/index.d.ts.etsx' does not exist.
 File '/home/src/projects/project/node_modules/foo/index.d.ts.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/foo/index.d.ts' does not exist, skipping all lookups in it.
 Directory '/home/src/projects/node_modules' does not exist, skipping all lookups in it.
@@ -1038,14 +1072,20 @@ File '/home/src/projects/project/node_modules/bar/package.json' exists according
 File name '/home/src/projects/project/node_modules/bar/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.d.ts' does not exist.
 Loading module as file / folder, candidate module location '/home/src/projects/project/node_modules/bar/index.js', target file types: TypeScript, Declaration.
 File name '/home/src/projects/project/node_modules/bar/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar/index.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar/index.tsx' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar/index.ets' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar/index.etsx' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar/index.js.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.js.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.js.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.js.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.js.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/bar/index.js' does not exist, skipping all lookups in it.
 File '/home/src/projects/project/node_modules/@types/bar/package.json' exists according to earlier cached lookups.
@@ -1240,14 +1280,20 @@ File '/home/src/projects/project/node_modules/bar/package.json' exists according
 File name '/home/src/projects/project/node_modules/bar/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.d.ts' does not exist.
 Loading module as file / folder, candidate module location '/home/src/projects/project/node_modules/bar/index.js', target file types: TypeScript, Declaration.
 File name '/home/src/projects/project/node_modules/bar/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar/index.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar/index.tsx' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar/index.ets' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar/index.etsx' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar/index.js.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.js.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.js.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar/index.js.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar/index.js.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/bar/index.js' does not exist, skipping all lookups in it.
 File '/home/src/projects/project/node_modules/@types/bar/package.json' exists according to earlier cached lookups.
@@ -1975,14 +2021,20 @@ File '/home/src/projects/project/node_modules/bar2/package.json' exists accordin
 File name '/home/src/projects/project/node_modules/bar2/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar2/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.d.ts' does not exist.
 Loading module as file / folder, candidate module location '/home/src/projects/project/node_modules/bar2/index.js', target file types: TypeScript, Declaration.
 File name '/home/src/projects/project/node_modules/bar2/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar2/index.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar2/index.tsx' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar2/index.ets' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar2/index.etsx' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar2/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar2/index.js.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.js.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.js.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.js.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.js.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/bar2/index.js' does not exist, skipping all lookups in it.
 File '/home/src/projects/project/node_modules/@types/bar2/package.json' exists according to earlier cached lookups.
@@ -2300,14 +2352,20 @@ File '/home/src/projects/project/node_modules/bar2/package.json' exists accordin
 File name '/home/src/projects/project/node_modules/bar2/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar2/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.d.ts' does not exist.
 Loading module as file / folder, candidate module location '/home/src/projects/project/node_modules/bar2/index.js', target file types: TypeScript, Declaration.
 File name '/home/src/projects/project/node_modules/bar2/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar2/index.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar2/index.tsx' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar2/index.ets' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar2/index.etsx' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar2/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar2/index.js.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.js.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.js.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.js.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.js.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/bar2/index.js' does not exist, skipping all lookups in it.
 File '/home/src/projects/project/node_modules/@types/bar2/package.json' exists according to earlier cached lookups.
@@ -2633,14 +2691,20 @@ File '/home/src/projects/project/node_modules/bar2/package.json' exists accordin
 File name '/home/src/projects/project/node_modules/bar2/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar2/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.d.ts' does not exist.
 Loading module as file / folder, candidate module location '/home/src/projects/project/node_modules/bar2/index.js', target file types: TypeScript, Declaration.
 File name '/home/src/projects/project/node_modules/bar2/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar2/index.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar2/index.tsx' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar2/index.ets' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar2/index.etsx' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar2/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar2/index.js.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.js.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.js.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.js.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.js.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/bar2/index.js' does not exist, skipping all lookups in it.
 File '/home/src/projects/project/node_modules/@types/bar2/package.json' exists according to earlier cached lookups.
@@ -2652,9 +2716,13 @@ Loading module as file / folder, candidate module location '/home/src/projects/p
 File name '/home/src/projects/project/node_modules/@types/bar2/index.d.ts' has a '.d.ts' extension - stripping it.
 File '/home/src/projects/project/node_modules/@types/bar2/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/@types/bar2/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/@types/bar2/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/@types/bar2/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/@types/bar2/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/@types/bar2/index.d.ts.ts' does not exist.
 File '/home/src/projects/project/node_modules/@types/bar2/index.d.ts.tsx' does not exist.
+File '/home/src/projects/project/node_modules/@types/bar2/index.d.ts.ets' does not exist.
+File '/home/src/projects/project/node_modules/@types/bar2/index.d.ts.etsx' does not exist.
 File '/home/src/projects/project/node_modules/@types/bar2/index.d.ts.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/@types/bar2/index.d.ts' does not exist, skipping all lookups in it.
 Directory '/home/src/projects/node_modules' does not exist, skipping all lookups in it.
@@ -2791,9 +2859,13 @@ Loading module as file / folder, candidate module location '/home/src/projects/p
 File name '/home/src/projects/project/node_modules/foo2/index.d.ts' has a '.d.ts' extension - stripping it.
 File '/home/src/projects/project/node_modules/foo2/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/foo2/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/foo2/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/foo2/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/foo2/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/foo2/index.d.ts.ts' does not exist.
 File '/home/src/projects/project/node_modules/foo2/index.d.ts.tsx' does not exist.
+File '/home/src/projects/project/node_modules/foo2/index.d.ts.ets' does not exist.
+File '/home/src/projects/project/node_modules/foo2/index.d.ts.etsx' does not exist.
 File '/home/src/projects/project/node_modules/foo2/index.d.ts.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/foo2/index.d.ts' does not exist, skipping all lookups in it.
 Directory '/home/src/projects/node_modules' does not exist, skipping all lookups in it.
@@ -2856,14 +2928,20 @@ File '/home/src/projects/project/node_modules/bar2/package.json' exists accordin
 File name '/home/src/projects/project/node_modules/bar2/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar2/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.d.ts' does not exist.
 Loading module as file / folder, candidate module location '/home/src/projects/project/node_modules/bar2/index.js', target file types: TypeScript, Declaration.
 File name '/home/src/projects/project/node_modules/bar2/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar2/index.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar2/index.tsx' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar2/index.ets' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar2/index.etsx' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar2/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar2/index.js.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.js.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.js.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.js.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.js.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/bar2/index.js' does not exist, skipping all lookups in it.
 File '/home/src/projects/project/node_modules/@types/bar2/package.json' exists according to earlier cached lookups.
@@ -2875,9 +2953,13 @@ Loading module as file / folder, candidate module location '/home/src/projects/p
 File name '/home/src/projects/project/node_modules/@types/bar2/index.d.ts' has a '.d.ts' extension - stripping it.
 File '/home/src/projects/project/node_modules/@types/bar2/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/@types/bar2/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/@types/bar2/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/@types/bar2/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/@types/bar2/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/@types/bar2/index.d.ts.ts' does not exist.
 File '/home/src/projects/project/node_modules/@types/bar2/index.d.ts.tsx' does not exist.
+File '/home/src/projects/project/node_modules/@types/bar2/index.d.ts.ets' does not exist.
+File '/home/src/projects/project/node_modules/@types/bar2/index.d.ts.etsx' does not exist.
 File '/home/src/projects/project/node_modules/@types/bar2/index.d.ts.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/@types/bar2/index.d.ts' does not exist, skipping all lookups in it.
 Directory '/home/src/projects/node_modules' does not exist, skipping all lookups in it.
@@ -3015,9 +3097,13 @@ Loading module as file / folder, candidate module location '/home/src/projects/p
 File name '/home/src/projects/project/node_modules/foo2/index.d.ts' has a '.d.ts' extension - stripping it.
 File '/home/src/projects/project/node_modules/foo2/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/foo2/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/foo2/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/foo2/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/foo2/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/foo2/index.d.ts.ts' does not exist.
 File '/home/src/projects/project/node_modules/foo2/index.d.ts.tsx' does not exist.
+File '/home/src/projects/project/node_modules/foo2/index.d.ts.ets' does not exist.
+File '/home/src/projects/project/node_modules/foo2/index.d.ts.etsx' does not exist.
 File '/home/src/projects/project/node_modules/foo2/index.d.ts.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/foo2/index.d.ts' does not exist, skipping all lookups in it.
 Directory '/home/src/projects/node_modules' does not exist, skipping all lookups in it.
@@ -3080,14 +3166,20 @@ File '/home/src/projects/project/node_modules/bar2/package.json' exists accordin
 File name '/home/src/projects/project/node_modules/bar2/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar2/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.d.ts' does not exist.
 Loading module as file / folder, candidate module location '/home/src/projects/project/node_modules/bar2/index.js', target file types: TypeScript, Declaration.
 File name '/home/src/projects/project/node_modules/bar2/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar2/index.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar2/index.tsx' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar2/index.ets' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar2/index.etsx' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar2/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar2/index.js.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.js.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.js.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.js.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.js.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/bar2/index.js' does not exist, skipping all lookups in it.
 File '/home/src/projects/project/node_modules/@types/bar2/package.json' exists according to earlier cached lookups.
@@ -3282,14 +3374,20 @@ File '/home/src/projects/project/node_modules/bar2/package.json' exists accordin
 File name '/home/src/projects/project/node_modules/bar2/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar2/index.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.d.ts' does not exist.
 Loading module as file / folder, candidate module location '/home/src/projects/project/node_modules/bar2/index.js', target file types: TypeScript, Declaration.
 File name '/home/src/projects/project/node_modules/bar2/index.js' has a '.js' extension - stripping it.
 File '/home/src/projects/project/node_modules/bar2/index.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar2/index.tsx' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar2/index.ets' does not exist according to earlier cached lookups.
+File '/home/src/projects/project/node_modules/bar2/index.etsx' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar2/index.d.ts' does not exist according to earlier cached lookups.
 File '/home/src/projects/project/node_modules/bar2/index.js.ts' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.js.tsx' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.js.ets' does not exist.
+File '/home/src/projects/project/node_modules/bar2/index.js.etsx' does not exist.
 File '/home/src/projects/project/node_modules/bar2/index.js.d.ts' does not exist.
 Directory '/home/src/projects/project/node_modules/bar2/index.js' does not exist, skipping all lookups in it.
 File '/home/src/projects/project/node_modules/@types/bar2/package.json' exists according to earlier cached lookups.

@@ -4,6 +4,8 @@ Resolving in CJS mode with conditions 'require', 'types', 'node'.
 Loading module as file / folder, candidate module location '/lib', target file types: TypeScript, JavaScript, Declaration.
 File '/lib.ts' does not exist.
 File '/lib.tsx' does not exist.
+File '/lib.ets' does not exist.
+File '/lib.etsx' does not exist.
 File '/lib.d.ts' does not exist.
 File '/lib.js' does not exist.
 File '/lib.jsx' does not exist.
@@ -15,5 +17,7 @@ Found 'package.json' at '/lib/package.json'.
 File name '/lib/cjs/index.js' has a '.js' extension - stripping it.
 File '/lib/cjs/index.ts' does not exist.
 File '/lib/cjs/index.tsx' does not exist.
+File '/lib/cjs/index.ets' does not exist.
+File '/lib/cjs/index.etsx' does not exist.
 File '/lib/cjs/index.d.ts' exists - use it as a name resolution result.
 ======== Module name '../lib' was successfully resolved to '/lib/cjs/index.d.ts'. ========

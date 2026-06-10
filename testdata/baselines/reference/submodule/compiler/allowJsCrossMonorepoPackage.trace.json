@@ -9,11 +9,15 @@ Using 'exports' subpath '.' with target './index.js'.
 File name '/packages/main/node_modules/shared/index.js' has a '.js' extension - stripping it.
 File '/packages/main/node_modules/shared/index.ts' does not exist.
 File '/packages/main/node_modules/shared/index.tsx' does not exist.
+File '/packages/main/node_modules/shared/index.ets' does not exist.
+File '/packages/main/node_modules/shared/index.etsx' does not exist.
 File '/packages/main/node_modules/shared/index.d.ts' does not exist.
 Directory '/packages/main/node_modules/@types' does not exist, skipping all lookups in it.
 Directory '/packages/node_modules' does not exist, skipping all lookups in it.
 File '/node_modules/shared.ts' does not exist.
 File '/node_modules/shared.tsx' does not exist.
+File '/node_modules/shared.ets' does not exist.
+File '/node_modules/shared.etsx' does not exist.
 File '/node_modules/shared.d.ts' does not exist.
 Directory '/node_modules/@types' does not exist, skipping all lookups in it.
 Searching all ancestor node_modules directories for fallback extensions: JavaScript, JSON.
@@ -30,6 +34,8 @@ Searching all ancestor node_modules directories for preferred extensions: TypeSc
 File '/packages/main/node_modules/shared/package.json' exists according to earlier cached lookups.
 File '/packages/main/node_modules/shared.ts' does not exist.
 File '/packages/main/node_modules/shared.tsx' does not exist.
+File '/packages/main/node_modules/shared.ets' does not exist.
+File '/packages/main/node_modules/shared.etsx' does not exist.
 File '/packages/main/node_modules/shared.d.ts' does not exist.
 'package.json' does not have a 'typesVersions' field.
 'package.json' does not have a 'typings' field.
@@ -37,11 +43,15 @@ File '/packages/main/node_modules/shared.d.ts' does not exist.
 'package.json' does not have a 'main' field.
 File '/packages/main/node_modules/shared/index.ts' does not exist according to earlier cached lookups.
 File '/packages/main/node_modules/shared/index.tsx' does not exist according to earlier cached lookups.
+File '/packages/main/node_modules/shared/index.ets' does not exist according to earlier cached lookups.
+File '/packages/main/node_modules/shared/index.etsx' does not exist according to earlier cached lookups.
 File '/packages/main/node_modules/shared/index.d.ts' does not exist according to earlier cached lookups.
 Directory '/packages/main/node_modules/@types' does not exist, skipping all lookups in it.
 Directory '/packages/node_modules' does not exist, skipping all lookups in it.
 File '/node_modules/shared.ts' does not exist according to earlier cached lookups.
 File '/node_modules/shared.tsx' does not exist according to earlier cached lookups.
+File '/node_modules/shared.ets' does not exist according to earlier cached lookups.
+File '/node_modules/shared.etsx' does not exist according to earlier cached lookups.
 File '/node_modules/shared.d.ts' does not exist according to earlier cached lookups.
 Directory '/node_modules/@types' does not exist, skipping all lookups in it.
 ======== Module name 'shared' was successfully resolved to '/packages/shared/index.js' with Package ID 'shared/index.js@1.0.0'. ========
@@ -52,6 +62,8 @@ Loading module as file / folder, candidate module location '/packages/shared/uti
 File name '/packages/shared/utils.js' has a '.js' extension - stripping it.
 File '/packages/shared/utils.ts' does not exist.
 File '/packages/shared/utils.tsx' does not exist.
+File '/packages/shared/utils.ets' does not exist.
+File '/packages/shared/utils.etsx' does not exist.
 File '/packages/shared/utils.d.ts' does not exist.
 File '/packages/shared/utils.js' exists - use it as a name resolution result.
 ======== Module name './utils.js' was successfully resolved to '/packages/shared/utils.js'. ========
@@ -66,9 +78,13 @@ Directory '/packages/node_modules' does not exist, skipping all lookups in it.
 File '/node_modules/pkg/package.json' does not exist.
 File '/node_modules/pkg.ts' does not exist.
 File '/node_modules/pkg.tsx' does not exist.
+File '/node_modules/pkg.ets' does not exist.
+File '/node_modules/pkg.etsx' does not exist.
 File '/node_modules/pkg.d.ts' does not exist.
 File '/node_modules/pkg/index.ts' does not exist.
 File '/node_modules/pkg/index.tsx' does not exist.
+File '/node_modules/pkg/index.ets' does not exist.
+File '/node_modules/pkg/index.etsx' does not exist.
 File '/node_modules/pkg/index.d.ts' exists - use it as a name resolution result.
 Resolving real path for '/node_modules/pkg/index.d.ts', result '/node_modules/pkg/index.d.ts'.
 ======== Module name 'pkg' was successfully resolved to '/node_modules/pkg/index.d.ts'. ========

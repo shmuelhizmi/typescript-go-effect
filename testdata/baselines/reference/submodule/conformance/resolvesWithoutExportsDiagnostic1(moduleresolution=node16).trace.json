@@ -80,14 +80,20 @@ File '/node_modules/bar/package.json' exists according to earlier cached lookups
 File name '/node_modules/bar/index.js' has a '.js' extension - stripping it.
 File '/node_modules/bar/index.ts' does not exist.
 File '/node_modules/bar/index.tsx' does not exist.
+File '/node_modules/bar/index.ets' does not exist.
+File '/node_modules/bar/index.etsx' does not exist.
 File '/node_modules/bar/index.d.ts' does not exist.
 Loading module as file / folder, candidate module location '/node_modules/bar/index.js', target file types: TypeScript, Declaration.
 File name '/node_modules/bar/index.js' has a '.js' extension - stripping it.
 File '/node_modules/bar/index.ts' does not exist according to earlier cached lookups.
 File '/node_modules/bar/index.tsx' does not exist according to earlier cached lookups.
+File '/node_modules/bar/index.ets' does not exist according to earlier cached lookups.
+File '/node_modules/bar/index.etsx' does not exist according to earlier cached lookups.
 File '/node_modules/bar/index.d.ts' does not exist according to earlier cached lookups.
 File '/node_modules/bar/index.js.ts' does not exist.
 File '/node_modules/bar/index.js.tsx' does not exist.
+File '/node_modules/bar/index.js.ets' does not exist.
+File '/node_modules/bar/index.js.etsx' does not exist.
 File '/node_modules/bar/index.js.d.ts' does not exist.
 Directory '/node_modules/bar/index.js' does not exist, skipping all lookups in it.
 File '/node_modules/@types/bar/package.json' exists according to earlier cached lookups.

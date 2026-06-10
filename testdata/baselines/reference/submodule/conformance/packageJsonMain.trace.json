@@ -7,6 +7,8 @@ Searching all ancestor node_modules directories for preferred extensions: TypeSc
 Found 'package.json' at '/node_modules/foo/package.json'.
 File '/node_modules/foo.ts' does not exist.
 File '/node_modules/foo.tsx' does not exist.
+File '/node_modules/foo.ets' does not exist.
+File '/node_modules/foo.etsx' does not exist.
 File '/node_modules/foo.d.ts' does not exist.
 'package.json' does not have a 'typesVersions' field.
 'package.json' does not have a 'typings' field.
@@ -15,10 +17,14 @@ File '/node_modules/foo.d.ts' does not exist.
 Loading module as file / folder, candidate module location '/node_modules/foo/oof', target file types: TypeScript, Declaration.
 File '/node_modules/foo/oof.ts' does not exist.
 File '/node_modules/foo/oof.tsx' does not exist.
+File '/node_modules/foo/oof.ets' does not exist.
+File '/node_modules/foo/oof.etsx' does not exist.
 File '/node_modules/foo/oof.d.ts' does not exist.
 Directory '/node_modules/foo/oof' does not exist, skipping all lookups in it.
 File '/node_modules/foo/index.ts' does not exist.
 File '/node_modules/foo/index.tsx' does not exist.
+File '/node_modules/foo/index.ets' does not exist.
+File '/node_modules/foo/index.etsx' does not exist.
 File '/node_modules/foo/index.d.ts' does not exist.
 Directory '/node_modules/@types' does not exist, skipping all lookups in it.
 Searching all ancestor node_modules directories for fallback extensions: JavaScript, JSON.
@@ -40,6 +46,8 @@ Searching all ancestor node_modules directories for preferred extensions: TypeSc
 Found 'package.json' at '/node_modules/bar/package.json'.
 File '/node_modules/bar.ts' does not exist.
 File '/node_modules/bar.tsx' does not exist.
+File '/node_modules/bar.ets' does not exist.
+File '/node_modules/bar.etsx' does not exist.
 File '/node_modules/bar.d.ts' does not exist.
 'package.json' does not have a 'typesVersions' field.
 'package.json' does not have a 'typings' field.
@@ -48,18 +56,26 @@ File '/node_modules/bar.d.ts' does not exist.
 File name '/node_modules/bar/rab.js' has a '.js' extension - stripping it.
 File '/node_modules/bar/rab.ts' does not exist.
 File '/node_modules/bar/rab.tsx' does not exist.
+File '/node_modules/bar/rab.ets' does not exist.
+File '/node_modules/bar/rab.etsx' does not exist.
 File '/node_modules/bar/rab.d.ts' does not exist.
 Loading module as file / folder, candidate module location '/node_modules/bar/rab.js', target file types: TypeScript, Declaration.
 File name '/node_modules/bar/rab.js' has a '.js' extension - stripping it.
 File '/node_modules/bar/rab.ts' does not exist according to earlier cached lookups.
 File '/node_modules/bar/rab.tsx' does not exist according to earlier cached lookups.
+File '/node_modules/bar/rab.ets' does not exist according to earlier cached lookups.
+File '/node_modules/bar/rab.etsx' does not exist according to earlier cached lookups.
 File '/node_modules/bar/rab.d.ts' does not exist according to earlier cached lookups.
 File '/node_modules/bar/rab.js.ts' does not exist.
 File '/node_modules/bar/rab.js.tsx' does not exist.
+File '/node_modules/bar/rab.js.ets' does not exist.
+File '/node_modules/bar/rab.js.etsx' does not exist.
 File '/node_modules/bar/rab.js.d.ts' does not exist.
 Directory '/node_modules/bar/rab.js' does not exist, skipping all lookups in it.
 File '/node_modules/bar/index.ts' does not exist.
 File '/node_modules/bar/index.tsx' does not exist.
+File '/node_modules/bar/index.ets' does not exist.
+File '/node_modules/bar/index.etsx' does not exist.
 File '/node_modules/bar/index.d.ts' does not exist.
 Directory '/node_modules/@types' does not exist, skipping all lookups in it.
 Searching all ancestor node_modules directories for fallback extensions: JavaScript, JSON.
@@ -81,6 +97,8 @@ Searching all ancestor node_modules directories for preferred extensions: TypeSc
 Found 'package.json' at '/node_modules/baz/package.json'.
 File '/node_modules/baz.ts' does not exist.
 File '/node_modules/baz.tsx' does not exist.
+File '/node_modules/baz.ets' does not exist.
+File '/node_modules/baz.etsx' does not exist.
 File '/node_modules/baz.d.ts' does not exist.
 'package.json' does not have a 'typesVersions' field.
 'package.json' does not have a 'typings' field.
@@ -89,12 +107,18 @@ File '/node_modules/baz.d.ts' does not exist.
 Loading module as file / folder, candidate module location '/node_modules/baz/zab', target file types: TypeScript, Declaration.
 File '/node_modules/baz/zab.ts' does not exist.
 File '/node_modules/baz/zab.tsx' does not exist.
+File '/node_modules/baz/zab.ets' does not exist.
+File '/node_modules/baz/zab.etsx' does not exist.
 File '/node_modules/baz/zab.d.ts' does not exist.
 File '/node_modules/baz/zab/index.ts' does not exist.
 File '/node_modules/baz/zab/index.tsx' does not exist.
+File '/node_modules/baz/zab/index.ets' does not exist.
+File '/node_modules/baz/zab/index.etsx' does not exist.
 File '/node_modules/baz/zab/index.d.ts' does not exist.
 File '/node_modules/baz/index.ts' does not exist.
 File '/node_modules/baz/index.tsx' does not exist.
+File '/node_modules/baz/index.ets' does not exist.
+File '/node_modules/baz/index.etsx' does not exist.
 File '/node_modules/baz/index.d.ts' does not exist.
 Directory '/node_modules/@types' does not exist, skipping all lookups in it.
 Searching all ancestor node_modules directories for fallback extensions: JavaScript, JSON.

@@ -72,6 +72,8 @@ Resolving in CJS mode with conditions 'import', 'types'.
 Loading module as file / folder, candidate module location '/project/d', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/project/d.ts' does not exist.
 File '/project/d.tsx' does not exist.
+File '/project/d.ets' does not exist.
+File '/project/d.etsx' does not exist.
 File '/project/d.d.ts' does not exist.
 File '/project/d.js' does not exist.
 File '/project/d.jsx' does not exist.

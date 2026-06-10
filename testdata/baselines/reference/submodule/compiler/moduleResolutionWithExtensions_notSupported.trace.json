@@ -11,6 +11,8 @@ Resolving in CJS mode with conditions 'require', 'types'.
 Loading module as file / folder, candidate module location '/jsx', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/jsx.ts' does not exist.
 File '/jsx.tsx' does not exist.
+File '/jsx.ets' does not exist.
+File '/jsx.etsx' does not exist.
 File '/jsx.d.ts' does not exist.
 File '/jsx.js' does not exist.
 File '/jsx.jsx' exists - use it as a name resolution result.
@@ -21,6 +23,8 @@ Resolving in CJS mode with conditions 'require', 'types'.
 Loading module as file / folder, candidate module location '/js', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/js.ts' does not exist.
 File '/js.tsx' does not exist.
+File '/js.ets' does not exist.
+File '/js.etsx' does not exist.
 File '/js.d.ts' does not exist.
 File '/js.js' exists - use it as a name resolution result.
 ======== Module name './js' was successfully resolved to '/js.js'. ========

@@ -4,6 +4,8 @@ Resolving in CJS mode with conditions 'require', 'types'.
 Loading module as file / folder, candidate module location '/src/library-a', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/src/library-a.ts' does not exist.
 File '/src/library-a.tsx' does not exist.
+File '/src/library-a.ets' does not exist.
+File '/src/library-a.etsx' does not exist.
 File '/src/library-a.d.ts' does not exist.
 File '/src/library-a.js' does not exist.
 File '/src/library-a.jsx' does not exist.
@@ -16,6 +18,8 @@ Resolving in CJS mode with conditions 'require', 'types'.
 Loading module as file / folder, candidate module location '/src/library-b', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/src/library-b.ts' does not exist.
 File '/src/library-b.tsx' does not exist.
+File '/src/library-b.ets' does not exist.
+File '/src/library-b.etsx' does not exist.
 File '/src/library-b.d.ts' does not exist.
 File '/src/library-b.js' does not exist.
 File '/src/library-b.jsx' does not exist.
@@ -33,6 +37,8 @@ Searching all ancestor node_modules directories for preferred extensions: TypeSc
 File '/src/library-b/node_modules/library-a/package.json' does not exist.
 File '/src/library-b/node_modules/library-a.ts' does not exist.
 File '/src/library-b/node_modules/library-a.tsx' does not exist.
+File '/src/library-b/node_modules/library-a.ets' does not exist.
+File '/src/library-b/node_modules/library-a.etsx' does not exist.
 File '/src/library-b/node_modules/library-a.d.ts' does not exist.
 File '/src/library-b/node_modules/library-a/index.ts' exists - use it as a name resolution result.
 Resolving real path for '/src/library-b/node_modules/library-a/index.ts', result '/src/library-a/index.ts'.

@@ -7,9 +7,13 @@ Searching all ancestor node_modules directories for preferred extensions: TypeSc
 File '/node_modules/js/package.json' does not exist.
 File '/node_modules/js.ts' does not exist.
 File '/node_modules/js.tsx' does not exist.
+File '/node_modules/js.ets' does not exist.
+File '/node_modules/js.etsx' does not exist.
 File '/node_modules/js.d.ts' does not exist.
 File '/node_modules/js/index.ts' does not exist.
 File '/node_modules/js/index.tsx' does not exist.
+File '/node_modules/js/index.ets' does not exist.
+File '/node_modules/js/index.etsx' does not exist.
 File '/node_modules/js/index.d.ts' does not exist.
 Directory '/node_modules/@types' does not exist, skipping all lookups in it.
 Searching all ancestor node_modules directories for fallback extensions: JavaScript, JSON.

@@ -18,5 +18,7 @@ Loading module as file / folder, candidate module location '/src/jquery.js', tar
 File name '/src/jquery.js' has a '.js' extension - stripping it.
 File '/src/jquery.ts' does not exist.
 File '/src/jquery.tsx' does not exist.
+File '/src/jquery.ets' does not exist.
+File '/src/jquery.etsx' does not exist.
 File '/src/jquery.d.ts' exists - use it as a name resolution result.
 ======== Module name './jquery.js' was successfully resolved to '/src/jquery.d.ts'. ========

@@ -69,6 +69,8 @@ Using 'exports' subpath '.' with target './types/index.d.ts'.
 File name '/home/src/workspaces/project/packages/a/index.js' has a '.js' extension - stripping it.
 File '/home/src/workspaces/project/packages/a/index.ts' does not exist.
 File '/home/src/workspaces/project/packages/a/index.tsx' does not exist.
+File '/home/src/workspaces/project/packages/a/index.ets' does not exist.
+File '/home/src/workspaces/project/packages/a/index.etsx' does not exist.
 File '/home/src/workspaces/project/packages/a/index.d.ts' does not exist.
 File '/home/src/workspaces/project/packages/a/index.js' exists - use it as a name resolution result.
 'package.json' does not have a 'peerDependencies' field.

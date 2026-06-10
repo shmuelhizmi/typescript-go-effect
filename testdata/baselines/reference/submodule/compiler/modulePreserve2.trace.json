@@ -29,6 +29,8 @@ Using 'exports' subpath '.' with target './require.js'.
 File name '/node_modules/dep/require.js' has a '.js' extension - stripping it.
 File '/node_modules/dep/require.ts' does not exist.
 File '/node_modules/dep/require.tsx' does not exist.
+File '/node_modules/dep/require.ets' does not exist.
+File '/node_modules/dep/require.etsx' does not exist.
 File '/node_modules/dep/require.d.ts' exists - use it as a name resolution result.
 Resolved under condition 'require'.
 Exiting conditional exports.

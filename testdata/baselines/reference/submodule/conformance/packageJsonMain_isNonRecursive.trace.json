@@ -7,6 +7,8 @@ Searching all ancestor node_modules directories for preferred extensions: TypeSc
 Found 'package.json' at '/node_modules/foo/package.json'.
 File '/node_modules/foo.ts' does not exist.
 File '/node_modules/foo.tsx' does not exist.
+File '/node_modules/foo.ets' does not exist.
+File '/node_modules/foo.etsx' does not exist.
 File '/node_modules/foo.d.ts' does not exist.
 'package.json' does not have a 'typesVersions' field.
 'package.json' does not have a 'typings' field.
@@ -15,12 +17,18 @@ File '/node_modules/foo.d.ts' does not exist.
 Loading module as file / folder, candidate module location '/node_modules/foo/oof', target file types: TypeScript, Declaration.
 File '/node_modules/foo/oof.ts' does not exist.
 File '/node_modules/foo/oof.tsx' does not exist.
+File '/node_modules/foo/oof.ets' does not exist.
+File '/node_modules/foo/oof.etsx' does not exist.
 File '/node_modules/foo/oof.d.ts' does not exist.
 File '/node_modules/foo/oof/index.ts' does not exist.
 File '/node_modules/foo/oof/index.tsx' does not exist.
+File '/node_modules/foo/oof/index.ets' does not exist.
+File '/node_modules/foo/oof/index.etsx' does not exist.
 File '/node_modules/foo/oof/index.d.ts' does not exist.
 File '/node_modules/foo/index.ts' does not exist.
 File '/node_modules/foo/index.tsx' does not exist.
+File '/node_modules/foo/index.ets' does not exist.
+File '/node_modules/foo/index.etsx' does not exist.
 File '/node_modules/foo/index.d.ts' does not exist.
 Directory '/node_modules/@types' does not exist, skipping all lookups in it.
 Searching all ancestor node_modules directories for fallback extensions: JavaScript, JSON.

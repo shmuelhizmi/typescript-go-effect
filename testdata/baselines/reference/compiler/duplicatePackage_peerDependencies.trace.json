@@ -9,9 +9,13 @@ Directory '/src/node_modules' does not exist, skipping all lookups in it.
 File '/node_modules/a/package.json' does not exist.
 File '/node_modules/a.ts' does not exist.
 File '/node_modules/a.tsx' does not exist.
+File '/node_modules/a.ets' does not exist.
+File '/node_modules/a.etsx' does not exist.
 File '/node_modules/a.d.ts' does not exist.
 File '/node_modules/a/index.ts' does not exist.
 File '/node_modules/a/index.tsx' does not exist.
+File '/node_modules/a/index.ets' does not exist.
+File '/node_modules/a/index.etsx' does not exist.
 File '/node_modules/a/index.d.ts' exists - use it as a name resolution result.
 Resolving real path for '/node_modules/a/index.d.ts', result '/node_modules/a/index.d.ts'.
 ======== Module name 'a' was successfully resolved to '/node_modules/a/index.d.ts'. ========
@@ -26,9 +30,13 @@ Directory '/src/node_modules' does not exist, skipping all lookups in it.
 File '/node_modules/b/package.json' does not exist.
 File '/node_modules/b.ts' does not exist.
 File '/node_modules/b.tsx' does not exist.
+File '/node_modules/b.ets' does not exist.
+File '/node_modules/b.etsx' does not exist.
 File '/node_modules/b.d.ts' does not exist.
 File '/node_modules/b/index.ts' does not exist.
 File '/node_modules/b/index.tsx' does not exist.
+File '/node_modules/b/index.ets' does not exist.
+File '/node_modules/b/index.etsx' does not exist.
 File '/node_modules/b/index.d.ts' exists - use it as a name resolution result.
 Resolving real path for '/node_modules/b/index.d.ts', result '/node_modules/b/index.d.ts'.
 ======== Module name 'b' was successfully resolved to '/node_modules/b/index.d.ts'. ========
@@ -43,6 +51,8 @@ Searching all ancestor node_modules directories for preferred extensions: TypeSc
 Found 'package.json' at '/node_modules/a/node_modules/foo/package.json'.
 File '/node_modules/a/node_modules/foo.ts' does not exist.
 File '/node_modules/a/node_modules/foo.tsx' does not exist.
+File '/node_modules/a/node_modules/foo.ets' does not exist.
+File '/node_modules/a/node_modules/foo.etsx' does not exist.
 File '/node_modules/a/node_modules/foo.d.ts' does not exist.
 'package.json' does not have a 'typesVersions' field.
 'package.json' does not have a 'typings' field.
@@ -50,6 +60,8 @@ File '/node_modules/a/node_modules/foo.d.ts' does not exist.
 'package.json' does not have a 'main' field.
 File '/node_modules/a/node_modules/foo/index.ts' does not exist.
 File '/node_modules/a/node_modules/foo/index.tsx' does not exist.
+File '/node_modules/a/node_modules/foo/index.ets' does not exist.
+File '/node_modules/a/node_modules/foo/index.etsx' does not exist.
 File '/node_modules/a/node_modules/foo/index.d.ts' exists - use it as a name resolution result.
 'package.json' has a 'peerDependencies' field.
 Resolving real path for '/node_modules/a/node_modules/foo', result '/node_modules/a/node_modules/foo'.
@@ -70,6 +82,8 @@ Searching all ancestor node_modules directories for preferred extensions: TypeSc
 Found 'package.json' at '/node_modules/b/node_modules/foo/package.json'.
 File '/node_modules/b/node_modules/foo.ts' does not exist.
 File '/node_modules/b/node_modules/foo.tsx' does not exist.
+File '/node_modules/b/node_modules/foo.ets' does not exist.
+File '/node_modules/b/node_modules/foo.etsx' does not exist.
 File '/node_modules/b/node_modules/foo.d.ts' does not exist.
 'package.json' does not have a 'typesVersions' field.
 'package.json' does not have a 'typings' field.
@@ -77,6 +91,8 @@ File '/node_modules/b/node_modules/foo.d.ts' does not exist.
 'package.json' does not have a 'main' field.
 File '/node_modules/b/node_modules/foo/index.ts' does not exist.
 File '/node_modules/b/node_modules/foo/index.tsx' does not exist.
+File '/node_modules/b/node_modules/foo/index.ets' does not exist.
+File '/node_modules/b/node_modules/foo/index.etsx' does not exist.
 File '/node_modules/b/node_modules/foo/index.d.ts' exists - use it as a name resolution result.
 'package.json' has a 'peerDependencies' field.
 Resolving real path for '/node_modules/b/node_modules/foo', result '/node_modules/b/node_modules/foo'.

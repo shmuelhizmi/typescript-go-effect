@@ -8,6 +8,8 @@ Found 'package.json' at '/node_modules/foo/@bar/package.json'.
 Found 'package.json' at '/node_modules/foo/package.json'.
 File '/node_modules/foo/@bar.ts' does not exist.
 File '/node_modules/foo/@bar.tsx' does not exist.
+File '/node_modules/foo/@bar.ets' does not exist.
+File '/node_modules/foo/@bar.etsx' does not exist.
 File '/node_modules/foo/@bar.d.ts' does not exist.
 'package.json' does not have a 'typesVersions' field.
 'package.json' does not have a 'typings' field.

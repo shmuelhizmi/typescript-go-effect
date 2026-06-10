@@ -8,6 +8,8 @@ Found 'package.json' at '/node_modules/foo/package.json'.
 'package.json' does not have a 'typesVersions' field.
 File '/node_modules/foo/use.ts' does not exist.
 File '/node_modules/foo/use.tsx' does not exist.
+File '/node_modules/foo/use.ets' does not exist.
+File '/node_modules/foo/use.etsx' does not exist.
 File '/node_modules/foo/use.d.ts' exists - use it as a name resolution result.
 'package.json' does not have a 'peerDependencies' field.
 Resolving real path for '/node_modules/foo/use.d.ts', result '/node_modules/foo/use.d.ts'.
@@ -21,9 +23,13 @@ Searching all ancestor node_modules directories for preferred extensions: TypeSc
 File '/node_modules/a/package.json' does not exist.
 File '/node_modules/a.ts' does not exist.
 File '/node_modules/a.tsx' does not exist.
+File '/node_modules/a.ets' does not exist.
+File '/node_modules/a.etsx' does not exist.
 File '/node_modules/a.d.ts' does not exist.
 File '/node_modules/a/index.ts' does not exist.
 File '/node_modules/a/index.tsx' does not exist.
+File '/node_modules/a/index.ets' does not exist.
+File '/node_modules/a/index.etsx' does not exist.
 File '/node_modules/a/index.d.ts' exists - use it as a name resolution result.
 Resolving real path for '/node_modules/a/index.d.ts', result '/node_modules/a/index.d.ts'.
 ======== Module name 'a' was successfully resolved to '/node_modules/a/index.d.ts'. ========
@@ -33,6 +39,8 @@ Resolving in CJS mode with conditions 'require', 'types'.
 Loading module as file / folder, candidate module location '/node_modules/foo/index', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/node_modules/foo/index.ts' does not exist.
 File '/node_modules/foo/index.tsx' does not exist.
+File '/node_modules/foo/index.ets' does not exist.
+File '/node_modules/foo/index.etsx' does not exist.
 File '/node_modules/foo/index.d.ts' exists - use it as a name resolution result.
 File '/node_modules/foo/package.json' exists according to earlier cached lookups.
 'package.json' does not have a 'peerDependencies' field.
@@ -48,6 +56,8 @@ Searching all ancestor node_modules directories for preferred extensions: TypeSc
 Found 'package.json' at '/node_modules/a/node_modules/foo/package.json'.
 File '/node_modules/a/node_modules/foo.ts' does not exist.
 File '/node_modules/a/node_modules/foo.tsx' does not exist.
+File '/node_modules/a/node_modules/foo.ets' does not exist.
+File '/node_modules/a/node_modules/foo.etsx' does not exist.
 File '/node_modules/a/node_modules/foo.d.ts' does not exist.
 'package.json' does not have a 'typesVersions' field.
 'package.json' does not have a 'typings' field.
@@ -55,6 +65,8 @@ File '/node_modules/a/node_modules/foo.d.ts' does not exist.
 'package.json' does not have a 'main' field.
 File '/node_modules/a/node_modules/foo/index.ts' does not exist.
 File '/node_modules/a/node_modules/foo/index.tsx' does not exist.
+File '/node_modules/a/node_modules/foo/index.ets' does not exist.
+File '/node_modules/a/node_modules/foo/index.etsx' does not exist.
 File '/node_modules/a/node_modules/foo/index.d.ts' exists - use it as a name resolution result.
 'package.json' does not have a 'peerDependencies' field.
 Resolving real path for '/node_modules/a/node_modules/foo/index.d.ts', result '/node_modules/a/node_modules/foo/index.d.ts'.

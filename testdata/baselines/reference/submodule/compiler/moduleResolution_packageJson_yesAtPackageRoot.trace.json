@@ -9,10 +9,14 @@ Found 'package.json' at '/node_modules/foo/package.json'.
 'package.json' does not have a 'typesVersions' field.
 File '/node_modules/foo/bar.ts' does not exist.
 File '/node_modules/foo/bar.tsx' does not exist.
+File '/node_modules/foo/bar.ets' does not exist.
+File '/node_modules/foo/bar.etsx' does not exist.
 File '/node_modules/foo/bar.d.ts' does not exist.
 'package.json' does not have a 'typesVersions' field.
 File '/node_modules/foo/bar/index.ts' does not exist.
 File '/node_modules/foo/bar/index.tsx' does not exist.
+File '/node_modules/foo/bar/index.ets' does not exist.
+File '/node_modules/foo/bar/index.etsx' does not exist.
 File '/node_modules/foo/bar/index.d.ts' does not exist.
 Directory '/node_modules/@types' does not exist, skipping all lookups in it.
 Searching all ancestor node_modules directories for fallback extensions: JavaScript, JSON.

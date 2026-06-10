@@ -101,6 +101,8 @@ Searching all ancestor node_modules directories for preferred extensions: TypeSc
 Found 'package.json' at '/user/username/projects/myproject/plugin-one/node_modules/plugin-two/package.json'.
 File '/user/username/projects/myproject/plugin-one/node_modules/plugin-two.ts' does not exist.
 File '/user/username/projects/myproject/plugin-one/node_modules/plugin-two.tsx' does not exist.
+File '/user/username/projects/myproject/plugin-one/node_modules/plugin-two.ets' does not exist.
+File '/user/username/projects/myproject/plugin-one/node_modules/plugin-two.etsx' does not exist.
 File '/user/username/projects/myproject/plugin-one/node_modules/plugin-two.d.ts' does not exist.
 'package.json' does not have a 'typesVersions' field.
 'package.json' does not have a 'typings' field.
@@ -109,6 +111,8 @@ File '/user/username/projects/myproject/plugin-one/node_modules/plugin-two.d.ts'
 File name '/user/username/projects/myproject/plugin-one/node_modules/plugin-two/dist/commonjs/index.js' has a '.js' extension - stripping it.
 File '/user/username/projects/myproject/plugin-one/node_modules/plugin-two/dist/commonjs/index.ts' does not exist.
 File '/user/username/projects/myproject/plugin-one/node_modules/plugin-two/dist/commonjs/index.tsx' does not exist.
+File '/user/username/projects/myproject/plugin-one/node_modules/plugin-two/dist/commonjs/index.ets' does not exist.
+File '/user/username/projects/myproject/plugin-one/node_modules/plugin-two/dist/commonjs/index.etsx' does not exist.
 File '/user/username/projects/myproject/plugin-one/node_modules/plugin-two/dist/commonjs/index.d.ts' exists - use it as a name resolution result.
 'package.json' does not have a 'peerDependencies' field.
 Resolving real path for '/user/username/projects/myproject/plugin-one/node_modules/plugin-two/dist/commonjs/index.d.ts', result '/user/username/projects/myproject/plugin-two/dist/commonjs/index.d.ts'.
@@ -127,6 +131,8 @@ Searching all ancestor node_modules directories for preferred extensions: TypeSc
 Found 'package.json' at '/user/username/projects/myproject/plugin-one/node_modules/typescript-fsa/package.json'.
 File '/user/username/projects/myproject/plugin-one/node_modules/typescript-fsa.ts' does not exist.
 File '/user/username/projects/myproject/plugin-one/node_modules/typescript-fsa.tsx' does not exist.
+File '/user/username/projects/myproject/plugin-one/node_modules/typescript-fsa.ets' does not exist.
+File '/user/username/projects/myproject/plugin-one/node_modules/typescript-fsa.etsx' does not exist.
 File '/user/username/projects/myproject/plugin-one/node_modules/typescript-fsa.d.ts' does not exist.
 'package.json' does not have a 'typesVersions' field.
 'package.json' does not have a 'typings' field.
@@ -134,6 +140,8 @@ File '/user/username/projects/myproject/plugin-one/node_modules/typescript-fsa.d
 'package.json' does not have a 'main' field.
 File '/user/username/projects/myproject/plugin-one/node_modules/typescript-fsa/index.ts' does not exist.
 File '/user/username/projects/myproject/plugin-one/node_modules/typescript-fsa/index.tsx' does not exist.
+File '/user/username/projects/myproject/plugin-one/node_modules/typescript-fsa/index.ets' does not exist.
+File '/user/username/projects/myproject/plugin-one/node_modules/typescript-fsa/index.etsx' does not exist.
 File '/user/username/projects/myproject/plugin-one/node_modules/typescript-fsa/index.d.ts' exists - use it as a name resolution result.
 'package.json' does not have a 'peerDependencies' field.
 Resolving real path for '/user/username/projects/myproject/plugin-one/node_modules/typescript-fsa/index.d.ts', result '/user/username/projects/myproject/plugin-one/node_modules/typescript-fsa/index.d.ts'.
@@ -151,6 +159,8 @@ Directory '/user/username/projects/myproject/plugin-two/dist/node_modules' does 
 Found 'package.json' at '/user/username/projects/myproject/plugin-two/node_modules/typescript-fsa/package.json'.
 File '/user/username/projects/myproject/plugin-two/node_modules/typescript-fsa.ts' does not exist.
 File '/user/username/projects/myproject/plugin-two/node_modules/typescript-fsa.tsx' does not exist.
+File '/user/username/projects/myproject/plugin-two/node_modules/typescript-fsa.ets' does not exist.
+File '/user/username/projects/myproject/plugin-two/node_modules/typescript-fsa.etsx' does not exist.
 File '/user/username/projects/myproject/plugin-two/node_modules/typescript-fsa.d.ts' does not exist.
 'package.json' does not have a 'typesVersions' field.
 'package.json' does not have a 'typings' field.
@@ -158,6 +168,8 @@ File '/user/username/projects/myproject/plugin-two/node_modules/typescript-fsa.d
 'package.json' does not have a 'main' field.
 File '/user/username/projects/myproject/plugin-two/node_modules/typescript-fsa/index.ts' does not exist.
 File '/user/username/projects/myproject/plugin-two/node_modules/typescript-fsa/index.tsx' does not exist.
+File '/user/username/projects/myproject/plugin-two/node_modules/typescript-fsa/index.ets' does not exist.
+File '/user/username/projects/myproject/plugin-two/node_modules/typescript-fsa/index.etsx' does not exist.
 File '/user/username/projects/myproject/plugin-two/node_modules/typescript-fsa/index.d.ts' exists - use it as a name resolution result.
 'package.json' does not have a 'peerDependencies' field.
 Resolving real path for '/user/username/projects/myproject/plugin-two/node_modules/typescript-fsa/index.d.ts', result '/user/username/projects/myproject/plugin-two/node_modules/typescript-fsa/index.d.ts'.

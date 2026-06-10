@@ -35,6 +35,8 @@ Using 'exports' subpath './js/*.js' with target './index.js'.
 File name '/.src/node_modules/inner/index.js' has a '.js' extension - stripping it.
 File '/.src/node_modules/inner/index.ts' does not exist.
 File '/.src/node_modules/inner/index.tsx' does not exist.
+File '/.src/node_modules/inner/index.ets' does not exist.
+File '/.src/node_modules/inner/index.etsx' does not exist.
 File '/.src/node_modules/inner/index.d.ts' exists - use it as a name resolution result.
 Resolving real path for '/.src/node_modules/inner/index.d.ts', result '/.src/node_modules/inner/index.d.ts'.
 ======== Module name 'inner/js/index.js' was successfully resolved to '/.src/node_modules/inner/index.d.ts'. ========
@@ -75,6 +77,8 @@ Using 'exports' subpath './js/*.js' with target './index.js'.
 File name '/.src/node_modules/inner/index.js' has a '.js' extension - stripping it.
 File '/.src/node_modules/inner/index.ts' does not exist according to earlier cached lookups.
 File '/.src/node_modules/inner/index.tsx' does not exist according to earlier cached lookups.
+File '/.src/node_modules/inner/index.ets' does not exist according to earlier cached lookups.
+File '/.src/node_modules/inner/index.etsx' does not exist according to earlier cached lookups.
 File '/.src/node_modules/inner/index.d.ts' exists - use it as a name resolution result.
 Resolving real path for '/.src/node_modules/inner/index.d.ts', result '/.src/node_modules/inner/index.d.ts'.
 ======== Module name 'inner/js/index.js' was successfully resolved to '/.src/node_modules/inner/index.d.ts'. ========
@@ -115,6 +119,8 @@ Using 'exports' subpath './js/*.js' with target './index.js'.
 File name '/.src/node_modules/inner/index.js' has a '.js' extension - stripping it.
 File '/.src/node_modules/inner/index.ts' does not exist according to earlier cached lookups.
 File '/.src/node_modules/inner/index.tsx' does not exist according to earlier cached lookups.
+File '/.src/node_modules/inner/index.ets' does not exist according to earlier cached lookups.
+File '/.src/node_modules/inner/index.etsx' does not exist according to earlier cached lookups.
 File '/.src/node_modules/inner/index.d.ts' exists - use it as a name resolution result.
 Resolving real path for '/.src/node_modules/inner/index.d.ts', result '/.src/node_modules/inner/index.d.ts'.
 ======== Module name 'inner/js/index.js' was successfully resolved to '/.src/node_modules/inner/index.d.ts'. ========
@@ -146,6 +152,8 @@ Using 'exports' subpath './js/*.js' with target './index.js'.
 File name '/.src/node_modules/inner/index.js' has a '.js' extension - stripping it.
 File '/.src/node_modules/inner/index.ts' does not exist according to earlier cached lookups.
 File '/.src/node_modules/inner/index.tsx' does not exist according to earlier cached lookups.
+File '/.src/node_modules/inner/index.ets' does not exist according to earlier cached lookups.
+File '/.src/node_modules/inner/index.etsx' does not exist according to earlier cached lookups.
 File '/.src/node_modules/inner/index.d.ts' exists - use it as a name resolution result.
 Resolving real path for '/.src/node_modules/inner/index.d.ts', result '/.src/node_modules/inner/index.d.ts'.
 ======== Module name 'inner/js/index.js' was successfully resolved to '/.src/node_modules/inner/index.d.ts'. ========
@@ -177,6 +185,8 @@ Using 'exports' subpath './js/*.js' with target './index.js'.
 File name '/.src/node_modules/inner/index.js' has a '.js' extension - stripping it.
 File '/.src/node_modules/inner/index.ts' does not exist according to earlier cached lookups.
 File '/.src/node_modules/inner/index.tsx' does not exist according to earlier cached lookups.
+File '/.src/node_modules/inner/index.ets' does not exist according to earlier cached lookups.
+File '/.src/node_modules/inner/index.etsx' does not exist according to earlier cached lookups.
 File '/.src/node_modules/inner/index.d.ts' exists - use it as a name resolution result.
 Resolving real path for '/.src/node_modules/inner/index.d.ts', result '/.src/node_modules/inner/index.d.ts'.
 ======== Module name 'inner/js/index.js' was successfully resolved to '/.src/node_modules/inner/index.d.ts'. ========
@@ -208,6 +218,8 @@ Using 'exports' subpath './js/*.js' with target './index.js'.
 File name '/.src/node_modules/inner/index.js' has a '.js' extension - stripping it.
 File '/.src/node_modules/inner/index.ts' does not exist according to earlier cached lookups.
 File '/.src/node_modules/inner/index.tsx' does not exist according to earlier cached lookups.
+File '/.src/node_modules/inner/index.ets' does not exist according to earlier cached lookups.
+File '/.src/node_modules/inner/index.etsx' does not exist according to earlier cached lookups.
 File '/.src/node_modules/inner/index.d.ts' exists - use it as a name resolution result.
 Resolving real path for '/.src/node_modules/inner/index.d.ts', result '/.src/node_modules/inner/index.d.ts'.
 ======== Module name 'inner/js/index.js' was successfully resolved to '/.src/node_modules/inner/index.d.ts'. ========

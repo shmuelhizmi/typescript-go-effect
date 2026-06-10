@@ -16,6 +16,8 @@ Using 'exports' subpath '.' with target './dist/walk.js'.
 File name '/node_modules/acorn-walk/dist/walk.js' has a '.js' extension - stripping it.
 File '/node_modules/acorn-walk/dist/walk.ts' does not exist.
 File '/node_modules/acorn-walk/dist/walk.tsx' does not exist.
+File '/node_modules/acorn-walk/dist/walk.ets' does not exist.
+File '/node_modules/acorn-walk/dist/walk.etsx' does not exist.
 File '/node_modules/acorn-walk/dist/walk.d.ts' exists - use it as a name resolution result.
 'package.json' does not have a 'peerDependencies' field.
 Resolved under condition 'default'.
@@ -42,6 +44,8 @@ Using 'exports' subpath '.' with target './dist/walk.js'.
 File name '/node_modules/acorn-walk/dist/walk.js' has a '.js' extension - stripping it.
 File '/node_modules/acorn-walk/dist/walk.ts' does not exist according to earlier cached lookups.
 File '/node_modules/acorn-walk/dist/walk.tsx' does not exist according to earlier cached lookups.
+File '/node_modules/acorn-walk/dist/walk.ets' does not exist according to earlier cached lookups.
+File '/node_modules/acorn-walk/dist/walk.etsx' does not exist according to earlier cached lookups.
 File '/node_modules/acorn-walk/dist/walk.d.ts' exists - use it as a name resolution result.
 'package.json' does not have a 'peerDependencies' field.
 Resolved under condition 'default'.

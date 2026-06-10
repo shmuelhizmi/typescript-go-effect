@@ -8,6 +8,8 @@ Searching all ancestor node_modules directories for preferred extensions: TypeSc
 Found 'package.json' at '/.src/node_modules/ext/package.json'.
 File '/.src/node_modules/ext.ts' does not exist.
 File '/.src/node_modules/ext.tsx' does not exist.
+File '/.src/node_modules/ext.ets' does not exist.
+File '/.src/node_modules/ext.etsx' does not exist.
 File '/.src/node_modules/ext.d.ts' does not exist.
 'package.json' has a 'typesVersions' field with version-specific path mappings.
 'package.json' does not have a 'typings' field.
@@ -18,6 +20,8 @@ Trying substitution 'ts3.1/*', candidate module location: 'ts3.1/index'.
 Loading module as file / folder, candidate module location '/.src/node_modules/ext/ts3.1/index', target file types: TypeScript, Declaration.
 File '/.src/node_modules/ext/ts3.1/index.ts' does not exist.
 File '/.src/node_modules/ext/ts3.1/index.tsx' does not exist.
+File '/.src/node_modules/ext/ts3.1/index.ets' does not exist.
+File '/.src/node_modules/ext/ts3.1/index.etsx' does not exist.
 File '/.src/node_modules/ext/ts3.1/index.d.ts' exists - use it as a name resolution result.
 'package.json' does not have a 'peerDependencies' field.
 Resolving real path for '/.src/node_modules/ext/ts3.1/index.d.ts', result '/.src/node_modules/ext/ts3.1/index.d.ts'.
@@ -36,6 +40,8 @@ Module name 'other', matched pattern '*'.
 Trying substitution 'ts3.1/*', candidate module location: 'ts3.1/other'.
 File '/.src/node_modules/ext/ts3.1/other.ts' does not exist.
 File '/.src/node_modules/ext/ts3.1/other.tsx' does not exist.
+File '/.src/node_modules/ext/ts3.1/other.ets' does not exist.
+File '/.src/node_modules/ext/ts3.1/other.etsx' does not exist.
 File '/.src/node_modules/ext/ts3.1/other.d.ts' exists - use it as a name resolution result.
 'package.json' does not have a 'peerDependencies' field.
 Resolving real path for '/.src/node_modules/ext/ts3.1/other.d.ts', result '/.src/node_modules/ext/ts3.1/other.d.ts'.
@@ -54,6 +60,8 @@ Trying substitution 'ts3.1/*', candidate module location: 'ts3.1/index'.
 Loading module as file / folder, candidate module location '/.src/node_modules/ext/ts3.1/index', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/.src/node_modules/ext/ts3.1/index.ts' does not exist according to earlier cached lookups.
 File '/.src/node_modules/ext/ts3.1/index.tsx' does not exist according to earlier cached lookups.
+File '/.src/node_modules/ext/ts3.1/index.ets' does not exist according to earlier cached lookups.
+File '/.src/node_modules/ext/ts3.1/index.etsx' does not exist according to earlier cached lookups.
 File '/.src/node_modules/ext/ts3.1/index.d.ts' exists - use it as a name resolution result.
 ======== Module name '../' was successfully resolved to '/.src/node_modules/ext/ts3.1/index.d.ts'. ========
 ======== Resolving module '../other' from '/.src/node_modules/ext/ts3.1/other.d.ts'. ========
@@ -62,6 +70,8 @@ Resolving in CJS mode with conditions 'require', 'types'.
 Loading module as file / folder, candidate module location '/.src/node_modules/ext/other', target file types: TypeScript, JavaScript, Declaration, JSON.
 File '/.src/node_modules/ext/other.ts' does not exist.
 File '/.src/node_modules/ext/other.tsx' does not exist.
+File '/.src/node_modules/ext/other.ets' does not exist.
+File '/.src/node_modules/ext/other.etsx' does not exist.
 File '/.src/node_modules/ext/other.d.ts' exists - use it as a name resolution result.
 File '/.src/node_modules/ext/package.json' exists according to earlier cached lookups.
 'package.json' does not have a 'peerDependencies' field.

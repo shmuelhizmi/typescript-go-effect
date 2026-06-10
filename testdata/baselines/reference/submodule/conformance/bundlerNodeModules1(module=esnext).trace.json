@@ -11,6 +11,8 @@ Using 'exports' subpath '.' with target './index.js'.
 File name '/node_modules/dual/index.js' has a '.js' extension - stripping it.
 File '/node_modules/dual/index.ts' does not exist.
 File '/node_modules/dual/index.tsx' does not exist.
+File '/node_modules/dual/index.ets' does not exist.
+File '/node_modules/dual/index.etsx' does not exist.
 File '/node_modules/dual/index.d.ts' exists - use it as a name resolution result.
 'package.json' does not have a 'peerDependencies' field.
 Resolved under condition 'import'.
@@ -30,6 +32,8 @@ Using 'exports' subpath '.' with target './index.js'.
 File name '/node_modules/dual/index.js' has a '.js' extension - stripping it.
 File '/node_modules/dual/index.ts' does not exist according to earlier cached lookups.
 File '/node_modules/dual/index.tsx' does not exist according to earlier cached lookups.
+File '/node_modules/dual/index.ets' does not exist according to earlier cached lookups.
+File '/node_modules/dual/index.etsx' does not exist according to earlier cached lookups.
 File '/node_modules/dual/index.d.ts' exists - use it as a name resolution result.
 'package.json' does not have a 'peerDependencies' field.
 Resolved under condition 'import'.

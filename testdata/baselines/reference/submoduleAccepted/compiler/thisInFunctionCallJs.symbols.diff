@@ -5,7 +5,7 @@
  >this.data.length : Symbol(Array.length, Decl(lib.es5.d.ts, --, --))
  >this.data : Symbol(Test.data, Decl(a.js, 1, 19))
 ->this : Symbol(this)
-+>this : Symbol((Missing), Decl(a.js, 20, 13))
++>this : Symbol(this, Decl(a.js, 20, 13))
  >data : Symbol(Test.data, Decl(a.js, 1, 19))
  >length : Symbol(Array.length, Decl(lib.es5.d.ts, --, --))
 
@@ -14,6 +14,6 @@
  >this.data.length : Symbol(Array.length, Decl(lib.es5.d.ts, --, --))
  >this.data : Symbol(Test.data, Decl(a.js, 1, 19))
 ->this : Symbol(this)
-+>this : Symbol((Missing), Decl(a.js, 28, 13))
++>this : Symbol(this, Decl(a.js, 28, 13))
  >data : Symbol(Test.data, Decl(a.js, 1, 19))
  >length : Symbol(Array.length, Decl(lib.es5.d.ts, --, --))

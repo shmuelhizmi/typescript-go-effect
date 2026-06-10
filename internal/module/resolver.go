@@ -1530,6 +1530,13 @@ func (r *resolutionState) tryAddingExtensions(extensionless string, extensions e
 			if resolved := r.tryExtension(tspath.ExtensionTsx, extensionless, originalExtension == tspath.ExtensionTs || originalExtension == tspath.ExtensionDts); !resolved.shouldContinueSearching() {
 				return resolved
 			}
+			// EffectScript sources are TypeScript implementation files too.
+			if resolved := r.tryExtension(tspath.ExtensionEts, extensionless, false); !resolved.shouldContinueSearching() {
+				return resolved
+			}
+			if resolved := r.tryExtension(tspath.ExtensionEtsx, extensionless, false); !resolved.shouldContinueSearching() {
+				return resolved
+			}
 		}
 		if extensions&extensionsDeclaration != 0 {
 			if resolved := r.tryExtension(tspath.ExtensionDts, extensionless, originalExtension == tspath.ExtensionTs || originalExtension == tspath.ExtensionDts); !resolved.shouldContinueSearching() {

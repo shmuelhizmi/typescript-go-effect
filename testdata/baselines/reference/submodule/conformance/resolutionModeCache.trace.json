@@ -12,6 +12,8 @@ Using 'exports' subpath '.' with target './index.js'.
 File name '/node_modules/pkg/index.js' has a '.js' extension - stripping it.
 File '/node_modules/pkg/index.ts' does not exist.
 File '/node_modules/pkg/index.tsx' does not exist.
+File '/node_modules/pkg/index.ets' does not exist.
+File '/node_modules/pkg/index.etsx' does not exist.
 File '/node_modules/pkg/index.d.ts' exists - use it as a name resolution result.
 'package.json' does not have a 'peerDependencies' field.
 Resolved under condition 'require'.

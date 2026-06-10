@@ -13,6 +13,8 @@ Directory '/a/b/node_modules/@types/node/node_modules' does not exist, skipping 
 Directory '/a/b/node_modules/@types/node_modules' does not exist, skipping all lookups in it.
 File '/a/b/node_modules/ph.ts' does not exist.
 File '/a/b/node_modules/ph.tsx' does not exist.
+File '/a/b/node_modules/ph.ets' does not exist.
+File '/a/b/node_modules/ph.etsx' does not exist.
 File '/a/b/node_modules/ph.d.ts' does not exist.
 File '/a/b/node_modules/@types/ph.d.ts' does not exist.
 Directory '/a/node_modules' does not exist, skipping all lookups in it.
