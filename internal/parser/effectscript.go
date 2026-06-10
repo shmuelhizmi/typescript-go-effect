@@ -335,8 +335,8 @@ func (p *Parser) parseEffectDeclaration(pos int, modifiers *ast.ModifierList) *a
 	// Decorators become Effect.fn pipe combinators (top decorator outermost,
 	// i.e. last argument); non-decorator modifiers (export, ...) stay on the
 	// emitted variable statement.
-	fnArgs := []*ast.Node{p.makeStringLiteral(nameText, pos)}
 	keptModifiers := modifiers
+	var combinators []*ast.Node
 	if modifiers != nil {
 		var kept []*ast.Node
 		var decorators []*ast.Node
@@ -348,7 +348,7 @@ func (p *Parser) parseEffectDeclaration(pos int, modifiers *ast.ModifierList) *a
 			}
 		}
 		for i := len(decorators) - 1; i >= 0; i-- {
-			fnArgs = append(fnArgs, p.effectCombinatorFromDecorator(decorators[i]))
+			combinators = append(combinators, p.effectCombinatorFromDecorator(decorators[i]))
 		}
 		if len(decorators) > 0 {
 			if len(kept) == 0 {
@@ -360,8 +360,11 @@ func (p *Parser) parseEffectDeclaration(pos int, modifiers *ast.ModifierList) *a
 	}
 
 	funcExpr := p.makeGeneratorExpression(parameters, body, pos, end)
-	fn := p.makeEffectCall("fn", fnArgs, pos, end)
-	outer := p.finishNodeWithEnd(p.factory.NewCallExpression(fn, nil, nil, p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{funcExpr}), ast.NodeFlagsNone), pos, end)
+	fn := p.makeEffectCall("fn", []*ast.Node{p.makeStringLiteral(nameText, pos)}, pos, end)
+	// Effect.fn("name")(generator, ...combinators) — pipe combinators follow
+	// the generator in the second call (top decorator last = outermost).
+	outerArgs := append([]*ast.Node{funcExpr}, combinators...)
+	outer := p.finishNodeWithEnd(p.factory.NewCallExpression(fn, nil, nil, p.newNodeList(core.NewTextRange(pos, end), outerArgs), ast.NodeFlagsNone), pos, end)
 	decl := p.finishNodeWithEnd(p.factory.NewVariableDeclaration(name, nil, nil, outer), pos, end)
 	declList := p.finishNodeWithEnd(p.factory.NewVariableDeclarationList(p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{decl}), ast.NodeFlagsConst), pos, end)
 	return p.finishNodeWithEnd(p.factory.NewVariableStatement(keptModifiers, declList), pos, end)

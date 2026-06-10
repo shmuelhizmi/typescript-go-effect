@@ -227,17 +227,17 @@ effect fetchQuote(symbol: string): Quote raises QuoteError requires Http {
 ⇣
 
 ```ts
-const fetchQuote = Effect.fn(
-  "fetchQuote",
+const fetchQuote = Effect.fn("fetchQuote")(
+  function* (symbol: string) {
+    const http = yield* Http;
+    const res = yield* http.get(`/quote/${symbol}`).pipe(
+      Effect.catchTag("RateLimited", () => Effect.succeed(Quote.cached(symbol))),
+    );
+    return parseQuote((yield* res.json));
+  },
   Effect.timeout("10 seconds"),
   Effect.retry(Schedule.exponential("100 millis", 2).pipe(Schedule.upTo("5 seconds"))),
-)(function* (symbol: string) {
-  const http = yield* Http;
-  const res = yield* http.get(`/quote/${symbol}`).pipe(
-    Effect.catchTag("RateLimited", () => Effect.succeed(Quote.cached(symbol))),
-  );
-  return parseQuote((yield* res.json));
-});
+);
 ```
 
 ## 7. React interop (`.etsx`)

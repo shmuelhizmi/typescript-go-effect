@@ -32,8 +32,10 @@ Decorators compose inside `Effect.fn`'s variadic pipe arguments, top decorator
 
 ```
 ⟦ @d1 @d2 effect f(p): T { body } ⟧ =
-  const f = Effect.fn("f", ⟦d2⟧, ⟦d1⟧)(function* (p) { body' });
+  const f = Effect.fn("f")(function* (p) { body' }, ⟦d2⟧, ⟦d1⟧);
 ```
+
+(`Effect.fn(name)` accepts pipe combinators after the generator argument.)
 
 Well-known bare names resolve to `Effect.*`: `@retry(s)` → `Effect.retry(s)`,
 `@timeout(t)` → `Effect.timeout(t)`, `@withSpan(n)` → `Effect.withSpan(n)`,
