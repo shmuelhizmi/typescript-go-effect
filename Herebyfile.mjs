@@ -224,6 +224,25 @@ export const tsgoBuild = task({
     },
 });
 
+export const tsgoWasm = task({
+    name: "tsgo:wasm",
+    description: "Builds the tsgo wasm module for the browser playground.",
+    run: async () => {
+        const outDir = "./_playground/public/wasm";
+        await fs.promises.mkdir(outDir, { recursive: true });
+        // No "noembed" tag: the wasm module must embed the lib.d.ts files
+        // because there is no real file system in the browser.
+        await $({ env: { ...goBuildEnv, GOOS: "js", GOARCH: "wasm" } })`go build ${goBuildFlags} ${getReleaseBuildFlags()} -o ${path.join(outDir, "tsgo.wasm")} ./cmd/tsgo-wasm`;
+        const goroot = (await _$`go env GOROOT`).stdout.trim();
+        // The module-cache copy of wasm_exec.js is read-only; replace rather
+        // than overwrite and make the result writable for the next build.
+        const wasmExecOut = path.join(outDir, "wasm_exec.js");
+        await fs.promises.rm(wasmExecOut, { force: true });
+        await fs.promises.copyFile(path.join(goroot, "lib/wasm/wasm_exec.js"), wasmExecOut);
+        await fs.promises.chmod(wasmExecOut, 0o644);
+    },
+});
+
 export const tsgo = task({
     name: "tsgo",
     dependencies: [lib, tsgoBuild],

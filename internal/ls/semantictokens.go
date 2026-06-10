@@ -502,6 +502,13 @@ func encodeSemanticTokens(ctx context.Context, tokens []semanticToken, file *ast
 		}
 	}
 
+	// EffectScript constructs are lowered during parsing, so the visitor can
+	// yield nodes whose source positions are out of order relative to the
+	// original text; sort by source position before delta-encoding.
+	slices.SortStableFunc(tokens, func(a, b semanticToken) int {
+		return scanner.GetTokenPosOfNode(a.node, file, false) - scanner.GetTokenPosOfNode(b.node, file, false)
+	})
+
 	// Each token encodes 5 uint32 values: deltaLine, deltaChar, length, tokenType, tokenModifiers
 	encoded := make([]uint32, 0, len(tokens)*5)
 	prevLine := uint32(0)
@@ -544,10 +551,11 @@ func encodeSemanticTokens(ctx context.Context, tokens []semanticToken, file *ast
 		line := startPos.Line
 		char := startPos.Character
 
-		// Verify that positions are strictly increasing (visitor walks in order)
+		// Tokens are sorted by position above; a node synthesized by
+		// EffectScript lowering can reuse the position of an original node,
+		// so drop duplicates at the same start instead of double-reporting.
 		if len(encoded) > 0 && (line < prevLine || (line == prevLine && char <= prevChar)) {
-			panic(fmt.Sprintf("semantic tokens: positions must be strictly increasing: prev=(%d,%d) current=(%d,%d) for token at offset %d",
-				prevLine, prevChar, line, char, tokenStart))
+			continue
 		}
 
 		// Encode as: [deltaLine, deltaChar, length, tokenType, tokenModifiers]
