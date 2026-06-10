@@ -1476,3 +1476,27 @@ func (p *Parser) nextIsEffectFunctionExpression() bool {
 		p.nextToken()
 	}
 }
+
+// effect m(params) { body } (class member)
+//
+//	==>  m = Effect.fn("C.m")(function* (params) { body });
+//
+// The method becomes an instance field holding the Effect.fn value
+// (class-field semantics; SPEC §3.4). 'static effect m' becomes a static field.
+func (p *Parser) parseEffectClassMethod(pos int, modifiers *ast.ModifierList) *ast.Node {
+	p.nextToken() // consume 'effect'
+	name := p.parseIdentifier()
+	spanName := name.Text()
+	if p.currentEffectClassName != "" {
+		spanName = p.currentEffectClassName + "." + name.Text()
+	}
+	parameters := p.parseParameters(ParseFlagsYield)
+	p.parseReturnType(ast.KindColonToken, false /*isType*/)
+	body := p.parseEffectFunctionBlock()
+	end := p.nodePos()
+
+	funcExpr := p.makeGeneratorExpression(parameters, body, pos, end)
+	fn := p.makeEffectCall("fn", []*ast.Node{p.makeStringLiteral(spanName, pos)}, pos, end)
+	value := p.finishNodeWithEnd(p.factory.NewCallExpression(fn, nil, nil, p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{funcExpr}), ast.NodeFlagsNone), pos, end)
+	return p.finishNodeWithEnd(p.factory.NewPropertyDeclaration(modifiers, name, nil, nil, value), pos, end)
+}

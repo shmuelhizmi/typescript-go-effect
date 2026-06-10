@@ -84,6 +84,7 @@ type Parser struct {
 	inEffectBody                bool
 	inMatchArmGuard             bool
 	inEffectTypeSugar           bool
+	currentEffectClassName      string
 	effectHelpersUsed           map[string]struct{}
 
 	identifiers                map[string]string
@@ -1770,6 +1771,13 @@ func (p *Parser) parseClassDeclarationOrExpression(pos int, jsdoc jsdocScannerIn
 	p.parseExpected(ast.KindClassKeyword)
 	// We don't parse the name here in await context, instead we will report a grammar error in the checker.
 	name := p.parseNameOfClassDeclarationOrExpression()
+	saveClassName := p.currentEffectClassName
+	if name != nil {
+		p.currentEffectClassName = name.Text()
+	} else {
+		p.currentEffectClassName = ""
+	}
+	defer func() { p.currentEffectClassName = saveClassName }()
 	typeParameters := p.parseTypeParameters()
 	if modifiers != nil && core.Some(modifiers.Nodes, isExportModifier) {
 		p.setContextFlags(ast.NodeFlagsAwaitContext, true /*value*/)
@@ -1889,6 +1897,10 @@ func (p *Parser) parseClassElement() *ast.Node {
 		if constructorDeclaration != nil {
 			return constructorDeclaration
 		}
+	}
+	if p.isEffectScript() && p.token == ast.KindIdentifier && p.scanner.TokenValue() == "effect" &&
+		p.lookAhead((*Parser).nextIsEffectDeclarationStart) {
+		return p.parseEffectClassMethod(pos, modifiers)
 	}
 	if p.isIndexSignature() {
 		return p.checkJSSyntax(p.parseIndexSignatureDeclaration(pos, jsdoc, modifiers))

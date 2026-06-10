@@ -303,3 +303,27 @@ effect resources(cfg: string) {
 `)
 	assert.Equal(t, len(file.Diagnostics()), 0)
 }
+
+func TestEffectScriptClassMethods(t *testing.T) {
+	t.Parallel()
+	file := parseETS(t, `
+class UserRepo {
+  effect getById(id: string): string {
+    v <- load(id)
+    return v
+  }
+  static effect ping(): string {
+    return "pong"
+  }
+  regular() { return 1 }
+}
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0)
+	cls := file.Statements.Nodes[1].AsClassDeclaration() // after injected import
+	members := cls.Members.Nodes
+	assert.Equal(t, members[0].Kind, ast.KindPropertyDeclaration)
+	assert.Equal(t, members[1].Kind, ast.KindPropertyDeclaration)
+	assert.Equal(t, members[2].Kind, ast.KindMethodDeclaration)
+	init := members[0].AsPropertyDeclaration().Initializer
+	assert.Equal(t, init.Kind, ast.KindCallExpression)
+}
