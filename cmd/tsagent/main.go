@@ -21,15 +21,19 @@ func main() {
 }
 
 type globalFlags struct {
-	project string
-	format  string
-	raw     bool
-	limit   int
-	offset  int
-	connect string
+	project    string
+	format     string
+	raw        bool
+	limit      int
+	offset     int
+	connect    string
+	socketPath string
 }
 
-func registerGlobalFlags(fs *flag.FlagSet) *globalFlags {
+// registerGlobalFlags registers the flags valid on every command.
+// withSocketPath is false for the serve family, whose commands define their
+// own --socket-path flag (same meaning: the daemon socket to talk to).
+func registerGlobalFlags(fs *flag.FlagSet, withSocketPath bool) *globalFlags {
 	g := &globalFlags{}
 	fs.StringVar(&g.project, "project", "", "tsconfig.json path or directory (default: discovered from cwd)")
 	fs.StringVar(&g.format, "format", "", "output format: json, text, or ndjson (default: text)")
@@ -37,6 +41,9 @@ func registerGlobalFlags(fs *flag.FlagSet) *globalFlags {
 	fs.IntVar(&g.limit, "limit", 0, "maximum number of list items to emit (0 = unlimited)")
 	fs.IntVar(&g.offset, "offset", 0, "number of list items to skip")
 	fs.StringVar(&g.connect, "connect", "never", "route through a running session daemon: never (default), auto (use it if its socket exists), require (fail if unreachable)")
+	if withSocketPath {
+		fs.StringVar(&g.socketPath, "socket-path", "", "daemon unix socket path for --connect routing (default: derived from the resolved tsconfig)")
+	}
 	return g
 }
 
@@ -44,12 +51,13 @@ func registerGlobalFlags(fs *flag.FlagSet) *globalFlags {
 // (--connect): they configure the client side (project resolution, output
 // format/windowing, routing itself) and travel via dedicated Params fields.
 var globalFlagNames = map[string]bool{
-	"project": true,
-	"format":  true,
-	"raw":     true,
-	"limit":   true,
-	"offset":  true,
-	"connect": true,
+	"project":     true,
+	"format":      true,
+	"raw":         true,
+	"limit":       true,
+	"offset":      true,
+	"connect":     true,
+	"socket-path": true,
 }
 
 func run(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -67,7 +75,7 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	fs := flag.NewFlagSet(strings.TrimSpace(family+" "+cmd.Name), flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	global := registerGlobalFlags(fs)
+	global := registerGlobalFlags(fs, cmd.Family != "serve")
 	var cmdFlags any
 	if cmd.Flags != nil {
 		cmdFlags = cmd.Flags(fs)
@@ -151,13 +159,17 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 // daemon through the same output layer; json is the same envelope.
 func routeViaDaemon(cmd cli.Command, fs *flag.FlagSet, global *globalFlags, format cli.Format, args []string, stdout io.Writer, stderr io.Writer) (code int, handled bool) {
 	require := global.connect == "require"
-	socketPath, err := daemonSocketPath(global.project)
-	if err != nil {
-		if require {
-			fmt.Fprintf(stderr, "tsagent: --connect require: %v\n", err)
-			return cli.ExitFailed, true
+	socketPath := global.socketPath // --socket-path overrides the derived path
+	if socketPath == "" {
+		derived, err := daemonSocketPath(global.project)
+		if err != nil {
+			if require {
+				fmt.Fprintf(stderr, "tsagent: --connect require: %v\n", err)
+				return cli.ExitFailed, true
+			}
+			return 0, false
 		}
-		return 0, false
+		socketPath = derived
 	}
 	if !require {
 		// auto: only attempt the daemon when its socket exists.
@@ -177,7 +189,7 @@ func routeViaDaemon(cmd cli.Command, fs *flag.FlagSet, global *globalFlags, form
 		Limit:  global.limit,
 		Offset: global.offset,
 	}
-	code, err = serve.RouteCommand(socketPath, method, params, stdout, stderr)
+	code, err := serve.RouteCommand(socketPath, method, params, stdout, stderr)
 	if err != nil {
 		if require {
 			fmt.Fprintf(stderr, "tsagent: --connect require: %v\n", err)
@@ -297,5 +309,6 @@ func printHelp(w io.Writer) {
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Global flags: --project <tsconfig|dir>, --raw (JSON output), --format json|text|ndjson, --limit N, --offset N,")
-	fmt.Fprintln(w, "              --connect never|auto|require (route through a running `tsagent serve` daemon)")
+	fmt.Fprintln(w, "              --connect never|auto|require (route through a running `tsagent serve` daemon),")
+	fmt.Fprintln(w, "              --socket-path <path> (daemon socket for --connect; default derived from the tsconfig)")
 }

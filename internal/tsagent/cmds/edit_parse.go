@@ -185,6 +185,9 @@ func parseEditOpLine(lineNo int, tokens []string, body string, hasBody bool) (ed
 		if !hasBody {
 			return op, fmt.Errorf("line %d: insert requires a heredoc body (<<TAG)", lineNo)
 		}
+		if body == "" {
+			return op, fmt.Errorf("line %d: empty body", lineNo)
+		}
 		op.Place = place
 		op.Raw = fmt.Sprintf("insert %s %s (+%d lines)", place.Kind, editQuoteToken(editPlaceTarget(place)), editBodyLineCount(body))
 	case "replace":
@@ -193,6 +196,9 @@ func parseEditOpLine(lineNo int, tokens []string, body string, hasBody bool) (ed
 		}
 		if !hasBody {
 			return op, fmt.Errorf("line %d: replace requires a heredoc body (<<TAG)", lineNo)
+		}
+		if body == "" {
+			return op, fmt.Errorf("line %d: empty body", lineNo)
 		}
 		op.Sym = tokens[1]
 		op.Raw = fmt.Sprintf("replace %s (+%d lines)", editQuoteToken(op.Sym), editBodyLineCount(body))

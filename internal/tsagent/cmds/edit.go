@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/microsoft/typescript-go/internal/ast"
 	icore "github.com/microsoft/typescript-go/internal/core"
 	"github.com/microsoft/typescript-go/internal/tsagent/cli"
 	"github.com/microsoft/typescript-go/internal/tsagent/core"
+	"github.com/microsoft/typescript-go/internal/tspath"
 )
 
 // edit.go is the executor of the `tsagent edit` script DSL (plan Part B): a
@@ -152,9 +154,11 @@ func runEdit(ctx context.Context, ws *core.Workspace, f *editFlags, args []strin
 			return nil, err
 		}
 	}
+	b.validateInsertConflicts()
 	if len(b.msgs) > 0 {
 		return nil, cli.UsageErrorf("%s", strings.Join(b.msgs, "\n"))
 	}
+	emptyNotes := editDropEmptiedFiles(ws, &b.es)
 
 	tx, err := core.Execute(ctx, ws, b.es, core.TxOpts{Apply: !f.dryRun, AllowErrors: f.allowErrors, StrictGate: f.strictGate})
 	if err != nil {
@@ -164,7 +168,51 @@ func runEdit(ctx context.Context, ws *core.Workspace, f *editFlags, args []strin
 		return nil, cli.RefusedErrorf("edits would introduce %d new error(s) (pass --allow-errors to apply anyway):\n%s",
 			len(tx.NewErrors), editDiagsText(tx.NewErrors))
 	}
+	tx.Notes = append(tx.Notes, emptyNotes...)
 	return &EditScriptResult{Ops: b.reports, Tx: tx}, nil
+}
+
+// editDropEmptiedFiles converts a file's edits into a file deletion when the
+// edited result would contain only whitespace — the same hygiene cross-file
+// moves apply when they empty their source file. Returns the notes to attach
+// to the transaction result.
+func editDropEmptiedFiles(ws *core.Workspace, es *core.EditSet) []string {
+	if len(es.Edits) == 0 {
+		return nil
+	}
+	contents, _, err := core.OverlayFromEditSet(ws, *es)
+	if err != nil {
+		return nil // Execute reports the underlying problem
+	}
+	emptied := map[string]bool{}
+	var emptiedList []string
+	var notes []string
+	for _, fe := range es.Edits {
+		abs := tspath.GetNormalizedAbsolutePath(fe.FileName, ws.Cwd)
+		if emptied[abs] {
+			continue
+		}
+		text, ok := contents[abs]
+		if ok && strings.TrimSpace(text) == "" && ws.Program.GetSourceFile(abs) != nil {
+			emptied[abs] = true
+			emptiedList = append(emptiedList, abs)
+			notes = append(notes, fmt.Sprintf("%s became empty and was deleted", ws.RelPath(abs)))
+		}
+	}
+	if len(emptied) == 0 {
+		return nil
+	}
+	kept := es.Edits[:0]
+	for _, fe := range es.Edits {
+		if !emptied[tspath.GetNormalizedAbsolutePath(fe.FileName, ws.Cwd)] {
+			kept = append(kept, fe)
+		}
+	}
+	es.Edits = kept
+	for _, abs := range emptiedList {
+		es.Ops = append(es.Ops, core.FileOp{Kind: core.FileOpDelete, Path: abs})
+	}
+	return notes
 }
 
 // editScriptSource picks the script text: exactly one positional argument (a
@@ -203,12 +251,27 @@ type editResolvedOp struct {
 	decl     *ast.Node // primary declaration as decoded
 	declNode *ast.Node // widened deletion node (sole declarators → statement)
 	declFile *ast.SourceFile
+	// group holds ALL (widened) declarations of a function/method overload
+	// group addressed by a bare ID: delete/replace/within-file move operate
+	// on the whole group. nil for single declarations and `~N`-addressed
+	// signatures.
+	group []*ast.Node
 	// Anchor of before/after/into places.
-	anchorDecl *ast.Node
-	anchorNode *ast.Node
-	anchorFile *ast.SourceFile
+	anchorDecl  *ast.Node
+	anchorNode  *ast.Node
+	anchorFile  *ast.SourceFile
+	anchorGroup []*ast.Node // overload group of a bare-ID anchor (before → first, after → last)
 	// Target file of top/end places.
 	destFile *ast.SourceFile
+}
+
+// editOpNodes returns the declaration nodes an op operates on: the whole
+// overload group for bare group IDs, the single widened node otherwise.
+func (r *editResolvedOp) editOpNodes() []*ast.Node {
+	if len(r.group) > 1 {
+		return r.group
+	}
+	return []*ast.Node{r.declNode}
 }
 
 // editResolveOps resolves every op's symbol IDs and file paths. All failures
@@ -218,23 +281,40 @@ type editResolvedOp struct {
 func editResolveOps(ctx context.Context, ws *core.Workspace, ops []editOp) ([]editResolvedOp, error) {
 	var msgs []string
 	sawNotFound := false
-	resolveSym := func(line int, id string) (*ast.Symbol, *ast.Node, bool) {
+	resolveSym := func(line int, id string) (*ast.Symbol, *ast.Node, []*ast.Node, bool) {
 		symbol, decl, err := core.DecodeSymbolID(ctx, ws, id)
 		if err != nil {
-			if errors.Is(err, core.ErrNotFound) {
+			switch {
+			case errors.Is(err, core.ErrBadSymbolAddress):
+				// Self-explanatory addressing errors (ambiguous merged IDs,
+				// ordinal out of range, position misses) surface verbatim.
+				sawNotFound = true
+				msgs = append(msgs, fmt.Sprintf("line %d: %v", line, err))
+			case errors.Is(err, core.ErrNotFound):
 				sawNotFound = true
 				msgs = append(msgs, fmt.Sprintf("line %d: unknown symbol %s%s", line, id, editClosestIDs(ws, id)))
-			} else {
+			default:
 				msgs = append(msgs, fmt.Sprintf("line %d: %v", line, err))
 			}
-			return nil, nil, false
+			return nil, nil, nil, false
 		}
 		if decl == nil {
 			sawNotFound = true
 			msgs = append(msgs, fmt.Sprintf("line %d: symbol %s has no declaration", line, id))
-			return nil, nil, false
+			return nil, nil, nil, false
 		}
-		return symbol, decl, true
+		// A bare ID (no ~N ordinal) over an overload group addresses the
+		// whole group.
+		var group []*ast.Node
+		if !editIDHasOrdinal(id) {
+			if decls := core.OverloadGroupDecls(symbol, ast.GetSourceFileOfNode(decl)); len(decls) > 1 {
+				group = make([]*ast.Node, len(decls))
+				for i, d := range decls {
+					group[i] = refactorDeletionNode(d)
+				}
+			}
+		}
+		return symbol, decl, group, true
 	}
 
 	resolved := make([]editResolvedOp, 0, len(ops))
@@ -242,20 +322,22 @@ func editResolveOps(ctx context.Context, ws *core.Workspace, ops []editOp) ([]ed
 		r := editResolvedOp{op: op}
 		ok := true
 		if op.Sym != "" {
-			if symbol, decl, k := resolveSym(op.Line, op.Sym); k {
+			if symbol, decl, group, k := resolveSym(op.Line, op.Sym); k {
 				r.symbol, r.decl = symbol, decl
 				r.declNode = refactorDeletionNode(decl)
 				r.declFile = ast.GetSourceFileOfNode(decl)
+				r.group = group
 			} else {
 				ok = false
 			}
 		}
 		switch op.Place.Kind {
 		case "before", "after", "into":
-			if _, decl, k := resolveSym(op.Line, op.Place.Sym); k {
+			if _, decl, group, k := resolveSym(op.Line, op.Place.Sym); k {
 				r.anchorDecl = decl
 				r.anchorNode = refactorDeletionNode(decl)
 				r.anchorFile = ast.GetSourceFileOfNode(decl)
+				r.anchorGroup = group
 			} else {
 				ok = false
 			}
@@ -319,8 +401,20 @@ type editBuilder struct {
 	ws      *core.Workspace
 	es      core.EditSet
 	claims  map[string][]editClaim
+	inserts []editInsertMark
 	msgs    []string
 	reports []EditOpReport
+}
+
+// editInsertMark records a zero-width insert position for post-build conflict
+// validation: an insert inside a range another op REPLACES is a genuine
+// conflict (reported with line attribution); inserts inside a deleted/moved
+// range compose (the engine lands them at the vacated spot).
+type editInsertMark struct {
+	line int
+	raw  string
+	file string
+	pos  int
 }
 
 func (b *editBuilder) failf(op editOp, format string, args ...any) {
@@ -356,22 +450,33 @@ func (b *editBuilder) buildOp(ctx context.Context, r editResolvedOp) error {
 	op := r.op
 	switch op.Verb {
 	case "delete":
-		dr := refactorCollapseBlankAfterDeletion(r.declFile.Text(), refactorDeletionRange(r.declFile, r.declNode))
-		b.claim(op, r.declFile.FileName(), dr)
-		b.addEdit(r.declFile.FileName(), icore.TextChange{TextRange: dr, NewText: ""})
-		b.report(op, nil, b.ws.RelPath(r.declFile.FileName()))
+		text := r.declFile.Text()
+		nodes := r.editOpNodes()
+		for _, node := range nodes {
+			dr := editDeletionRange(text, refactorDeletionRange(r.declFile, node))
+			b.claim(op, r.declFile.FileName(), dr)
+			b.addEdit(r.declFile.FileName(), icore.TextChange{TextRange: dr, NewText: ""})
+		}
+		b.report(op, editGroupNotes(nodes, "deleted"), b.ws.RelPath(r.declFile.FileName()))
 	case "replace":
-		dr := refactorDeletionRange(r.declFile, r.declNode)
+		nodes := r.editOpNodes()
+		dr, contiguous := editContiguousRange(r.declFile, nodes)
+		if !contiguous {
+			b.failf(op, "cannot replace %s: the %d overload declarations are not contiguous; replace each ~N individually", op.Sym, len(nodes))
+			return nil
+		}
 		b.claim(op, r.declFile.FileName(), dr)
-		b.addEdit(r.declFile.FileName(), icore.TextChange{TextRange: dr, NewText: editEnsureNewline(op.Body)})
-		b.report(op, nil, b.ws.RelPath(r.declFile.FileName()))
+		newText := editNormalizeEOL(r.declFile.Text(), editEnsureNewline(op.Body))
+		b.addEdit(r.declFile.FileName(), icore.TextChange{TextRange: dr, NewText: newText})
+		b.report(op, editGroupNotes(nodes, "replaced"), b.ws.RelPath(r.declFile.FileName()))
 	case "insert":
 		file, pos, err := editInsertPos(r)
 		if err != nil {
 			b.failf(op, "%v", err)
 			return nil
 		}
-		newText := editSeparateBlock(r, file, pos, editEnsureNewline(op.Body))
+		newText := editNormalizeEOL(file.Text(), editSeparateBlock(r, file, pos, editEnsureNewline(op.Body)))
+		b.inserts = append(b.inserts, editInsertMark{line: op.Line, raw: op.Raw, file: file.FileName(), pos: pos})
 		b.addEdit(file.FileName(), icore.TextChange{TextRange: icore.NewTextRange(pos, pos), NewText: newText})
 		b.report(op, nil, b.ws.RelPath(file.FileName()))
 	case "move":
@@ -380,14 +485,107 @@ func (b *editBuilder) buildOp(ctx context.Context, r editResolvedOp) error {
 	return nil
 }
 
+// editGroupNotes annotates an op that expanded over a whole overload group.
+func editGroupNotes(nodes []*ast.Node, verb string) []string {
+	if len(nodes) < 2 {
+		return nil
+	}
+	return []string{fmt.Sprintf("%s all %d overload declarations", verb, len(nodes))}
+}
+
+// editContiguousRange merges the deletion ranges of an op's declarations into
+// one range. ok is false when anything other than whitespace separates two
+// consecutive declarations (a non-contiguous overload group).
+func editContiguousRange(file *ast.SourceFile, nodes []*ast.Node) (icore.TextRange, bool) {
+	text := file.Text()
+	ranges := make([]icore.TextRange, len(nodes))
+	for i, n := range nodes {
+		ranges[i] = refactorDeletionRange(file, n)
+	}
+	for i := 1; i < len(ranges); i++ {
+		gapStart, gapEnd := ranges[i-1].End(), ranges[i].Pos()
+		if gapEnd > gapStart && strings.TrimSpace(text[gapStart:gapEnd]) != "" {
+			return icore.TextRange{}, false
+		}
+	}
+	return icore.NewTextRange(ranges[0].Pos(), ranges[len(ranges)-1].End()), true
+}
+
+// validateInsertConflicts reports inserts whose position falls strictly
+// inside a range another op replaces (line-attributed, like every other
+// conflict). Inserts inside deleted/moved ranges compose instead: the engine
+// repositions them to the vacated spot.
+func (b *editBuilder) validateInsertConflicts() {
+	for _, m := range b.inserts {
+		for _, c := range b.claims[m.file] {
+			if c.pos < m.pos && m.pos < c.end && c.verb == "replace" {
+				b.msgs = append(b.msgs, fmt.Sprintf("line %d: %s conflicts with %s at line %d (overlapping ranges in %s)",
+					m.line, m.raw, c.verb, c.line, b.ws.RelPath(m.file)))
+			}
+		}
+	}
+}
+
+// editDeletionRange applies blank-line hygiene to a deletion range: one extra
+// newline is eaten when the deletion would leave a double blank line
+// (refactorCollapseBlankAfterDeletion), and a deletion at the very top of the
+// file also eats the blank line(s) it would leave at BOF.
+func editDeletionRange(text string, dr icore.TextRange) icore.TextRange {
+	r := refactorCollapseBlankAfterDeletion(text, dr)
+	if r.Pos() != 0 {
+		return r
+	}
+	end := r.End()
+	for end < len(text) {
+		switch {
+		case text[end] == '\n':
+			end++
+		case text[end] == '\r' && end+1 < len(text) && text[end+1] == '\n':
+			end += 2
+		default:
+			return icore.NewTextRange(0, end)
+		}
+	}
+	return icore.NewTextRange(0, end)
+}
+
+// editNormalizeEOL rewrites inserted text to the target file's dominant EOL:
+// heredoc bodies arrive LF-normalized from the parser, so writing them into
+// a CRLF-dominant file verbatim would produce mixed line endings.
+func editNormalizeEOL(fileText string, s string) string {
+	crlf := strings.Count(fileText, "\r\n")
+	if crlf == 0 || crlf <= strings.Count(fileText, "\n")-crlf {
+		return s
+	}
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.ReplaceAll(s, "\n", "\r\n")
+}
+
+// editIDHasOrdinal reports whether a symbol ID ends with an explicit `~N`
+// declaration ordinal.
+func editIDHasOrdinal(id string) bool {
+	tilde := strings.LastIndexByte(id, '~')
+	if tilde < 0 || tilde == len(id)-1 {
+		return false
+	}
+	_, err := strconv.Atoi(id[tilde+1:])
+	return err == nil
+}
+
 // editInsertPos resolves an insert op's file and byte offset. `top` lands
 // below any shebang and directive prologue (`"use client";`), never above it.
 func editInsertPos(r editResolvedOp) (*ast.SourceFile, int, error) {
+	// A bare overload-group anchor means "the whole group": before → ahead of
+	// the first signature, after → past the last declaration.
+	first, last := r.anchorNode, r.anchorNode
+	if len(r.anchorGroup) > 1 {
+		first, last = r.anchorGroup[0], r.anchorGroup[len(r.anchorGroup)-1]
+	}
 	switch r.op.Place.Kind {
 	case "before":
-		return r.anchorFile, refactorDeletionRange(r.anchorFile, r.anchorNode).Pos(), nil
+		return r.anchorFile, refactorDeletionRange(r.anchorFile, first).Pos(), nil
 	case "after":
-		return r.anchorFile, refactorDeletionRange(r.anchorFile, r.anchorNode).End(), nil
+		return r.anchorFile, refactorDeletionRange(r.anchorFile, last).End(), nil
 	case "top":
 		return r.destFile, importInsertOffset(r.destFile), nil
 	case "end":
@@ -503,7 +701,7 @@ func (b *editBuilder) buildMove(ctx context.Context, r editResolvedOp) error {
 			if op.Place.Kind == "end" {
 				pos = len(r.declFile.Text())
 			}
-			b.reorder(op, r.declFile, r.declNode, pos)
+			b.reorder(op, r.declFile, r.editOpNodes(), pos)
 		default:
 			insertPos := importInsertOffset(r.destFile)
 			if op.Place.Kind == "end" {
@@ -515,23 +713,27 @@ func (b *editBuilder) buildMove(ctx context.Context, r editResolvedOp) error {
 	}
 
 	// move <sym> before|after <sym>
-	if r.anchorDecl == r.decl || r.anchorNode == r.declNode {
+	if r.anchorDecl == r.decl || r.anchorNode == r.declNode ||
+		slices.Contains(r.group, r.anchorNode) || slices.Contains(r.anchorGroup, r.declNode) {
 		b.failf(op, "cannot move a declaration relative to itself")
 		return nil
 	}
 	anchorTop := r.anchorNode.Parent != nil && r.anchorNode.Parent.Kind == ast.KindSourceFile
 	anchorContainer := editClassLikeContainer(r.anchorDecl)
-	anchorRange := func() icore.TextRange { return refactorDeletionRange(r.anchorFile, r.anchorNode) }
 	anchorPos := func() int {
-		ar := anchorRange()
-		if op.Place.Kind == "after" {
-			return ar.End()
+		// A bare overload-group anchor means "the whole group".
+		first, last := r.anchorNode, r.anchorNode
+		if len(r.anchorGroup) > 1 {
+			first, last = r.anchorGroup[0], r.anchorGroup[len(r.anchorGroup)-1]
 		}
-		return ar.Pos()
+		if op.Place.Kind == "after" {
+			return refactorDeletionRange(r.anchorFile, last).End()
+		}
+		return refactorDeletionRange(r.anchorFile, first).Pos()
 	}
 	switch {
 	case container != nil && anchorContainer == container:
-		b.reorder(op, r.declFile, r.declNode, anchorPos())
+		b.reorder(op, r.declFile, r.editOpNodes(), anchorPos())
 	case container != nil:
 		b.failf(op, "cannot move a member across containers; use delete + insert into")
 	case !topLevel:
@@ -539,31 +741,41 @@ func (b *editBuilder) buildMove(ctx context.Context, r editResolvedOp) error {
 	case !anchorTop:
 		b.failf(op, "the move anchor must be a top-level declaration")
 	case r.anchorFile == r.declFile:
-		b.reorder(op, r.declFile, r.declNode, anchorPos())
+		b.reorder(op, r.declFile, r.editOpNodes(), anchorPos())
 	default:
 		return b.crossFileMove(ctx, r, symbolMoveDest{fileAbs: r.anchorFile.FileName(), file: r.anchorFile, insertPos: anchorPos()})
 	}
 	return nil
 }
 
-// reorder emits a within-file move: delete the declaration's trivia-aware
-// range and re-insert the exact same bytes (newline-terminated) at insertPos.
-// Both offsets address the original text; the engine merges them. Top-level
-// moves get blank-line hygiene: one blank line separates the re-inserted
-// block from its before/after anchor, and a deletion that would leave a
-// double blank line eats one extra newline.
-func (b *editBuilder) reorder(op editOp, file *ast.SourceFile, node *ast.Node, insertPos int) {
+// reorder emits a within-file move: delete each declaration's trivia-aware
+// range and re-insert the exact same bytes (newline-terminated) at insertPos
+// — bare-ID overload groups move as one block, in source order. Both offsets
+// address the original text; the engine merges them. Top-level moves get
+// blank-line hygiene: one blank line separates the re-inserted block from its
+// before/after anchor, and a deletion that would leave a double blank line
+// (or a blank line at BOF) eats the extra newline(s).
+func (b *editBuilder) reorder(op editOp, file *ast.SourceFile, nodes []*ast.Node, insertPos int) {
 	text := file.Text()
-	dr := refactorDeletionRange(file, node)
-	moved := editEnsureNewline(text[dr.Pos():dr.End()])
+	topLevel := nodes[0].Parent != nil && nodes[0].Parent.Kind == ast.KindSourceFile
+	var sb strings.Builder
+	for _, node := range nodes {
+		dr := refactorDeletionRange(file, node)
+		sb.WriteString(editEnsureNewline(text[dr.Pos():dr.End()]))
+		delRange := dr
+		if topLevel {
+			delRange = editDeletionRange(text, dr)
+		}
+		b.claim(op, file.FileName(), delRange)
+		b.addEdit(file.FileName(), icore.TextChange{TextRange: delRange, NewText: ""})
+	}
+	moved := sb.String()
 	if insertPos > 0 && text[insertPos-1] != '\n' {
 		moved = "\n" + moved
 	}
-	delRange := dr
-	if node.Parent != nil && node.Parent.Kind == ast.KindSourceFile {
-		delRange = refactorCollapseBlankAfterDeletion(text, dr)
+	if topLevel {
 		switch op.Place.Kind {
-		case "after":
+		case "after", "end":
 			if !editBlankLineBefore(text, insertPos) {
 				moved = "\n" + moved
 			}
@@ -571,16 +783,14 @@ func (b *editBuilder) reorder(op editOp, file *ast.SourceFile, node *ast.Node, i
 			if !editBlankLineAt(text, insertPos) {
 				moved += "\n"
 			}
-		case "end":
-			if !editBlankLineBefore(text, insertPos) {
-				moved = "\n" + moved
-			}
 		}
 	}
-	b.claim(op, file.FileName(), delRange)
-	b.addEdit(file.FileName(), icore.TextChange{TextRange: delRange, NewText: ""})
 	b.addEdit(file.FileName(), icore.TextChange{TextRange: icore.NewTextRange(insertPos, insertPos), NewText: moved})
-	b.report(op, nil, b.ws.RelPath(file.FileName()))
+	notes := editGroupNotes(nodes, "moved")
+	if op.WithDeps {
+		notes = append(notes, "with-deps has no effect on within-file moves")
+	}
+	b.report(op, notes, b.ws.RelPath(file.FileName()))
 }
 
 // crossFileMove plans a cross-file move through the shared mv-symbol planner

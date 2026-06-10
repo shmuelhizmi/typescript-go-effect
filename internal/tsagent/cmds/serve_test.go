@@ -135,6 +135,20 @@ func TestServeDaemonStatusStopOverSocket(t *testing.T) {
 		t.Errorf("status configPath = %v", status["configPath"])
 	}
 
+	// In text mode the admin reply renders as compact key: value lines (the
+	// same output layer every command uses), never as a JSON dump.
+	var textBuf strings.Builder
+	if err := (&cli.Output{W: &textBuf, Format: cli.FormatText}).Write(result); err != nil {
+		t.Fatalf("text render: %v", err)
+	}
+	text := textBuf.String()
+	if !strings.Contains(text, "configPath: /project/tsconfig.json") {
+		t.Errorf("text status missing key: value rendering:\n%s", text)
+	}
+	if strings.Contains(text, "schemaVersion") || strings.Contains(text, "{") {
+		t.Errorf("text status must not be a JSON dump:\n%s", text)
+	}
+
 	// serve stop shuts the daemon down cleanly.
 	result, err = runRegistered(t, "serve", "stop", func(flags any) {
 		flags.(*serveClientFlags).socketPath = socketPath

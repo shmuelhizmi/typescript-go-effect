@@ -94,10 +94,16 @@ type CheckResult struct {
 	Diagnostics []*Diagnostic
 }
 
-var _ cli.Lister = (*CheckResult)(nil)
+var (
+	_ cli.Lister     = (*CheckResult)(nil)
+	_ cli.ZeroTexter = (*CheckResult)(nil)
+)
 
 func (r *CheckResult) Total() int     { return len(r.Diagnostics) }
 func (r *CheckResult) Item(i int) any { return r.Diagnostics[i] }
+
+// ZeroText keeps a clean `check` run unambiguous in text mode.
+func (r *CheckResult) ZeroText() string { return "0 diagnostics" }
 
 func (r *CheckResult) WriteItemText(w io.Writer, item any) error {
 	d := item.(*Diagnostic)
@@ -308,6 +314,7 @@ func runCheckSpeculative(ctx context.Context, ws *core.Workspace, flags *checkFl
 		return nil, err
 	}
 
+	core.NoteLargeTypeCheck(ws) // progress note on stderr for very large programs
 	specWs, err := core.SpeculativeWorkspace(ws, contents, deleted, false)
 	if err != nil {
 		return nil, fmt.Errorf("building speculative program: %w", err)

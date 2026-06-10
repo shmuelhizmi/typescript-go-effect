@@ -440,8 +440,19 @@ func TestEditGateRefusalExit4AndAllowErrors(t *testing.T) {
 	if !result.Tx.Applied || len(result.Tx.NewErrors) == 0 {
 		t.Fatalf("tx = %+v, want applied with new errors reported", result.Tx)
 	}
-	if strings.Contains(readWorkspaceFile(t, ws2, "/project/src/a.ts"), "function used") {
-		t.Error("--allow-errors should have applied the deletion")
+	// `used` was the file's only declaration, so the emptied file is deleted
+	// outright (with a note) rather than left as a whitespace husk.
+	if _, ok := ws2.FS.ReadFile("/project/src/a.ts"); ok {
+		t.Error("--allow-errors should have applied the deletion and removed the emptied file")
+	}
+	foundEmptyNote := false
+	for _, note := range result.Tx.Notes {
+		if strings.Contains(note, "became empty and was deleted") {
+			foundEmptyNote = true
+		}
+	}
+	if !foundEmptyNote {
+		t.Errorf("Notes = %v, want a became-empty deletion note", result.Tx.Notes)
 	}
 }
 
@@ -740,5 +751,208 @@ func TestEditTopEndUnknownFileExit3(t *testing.T) {
 	if !strings.Contains(err.Error(), "line 1: src/new.ts is not part of the program") ||
 		!strings.Contains(err.Error(), "refactor mv-symbol") {
 		t.Errorf("error = %q", err.Error())
+	}
+}
+
+// editOverloadFixture has a 3-declaration function overload group plus an
+// unrelated function.
+func editOverloadFixture() map[string]any {
+	return map[string]any{
+		"/project/src/a.ts": "export function pick(a: number): number;\nexport function pick(a: string): string;\nexport function pick(a: unknown): unknown {\n\treturn a;\n}\n\nexport function other(): number {\n\treturn 1;\n}\n",
+	}
+}
+
+func TestEditOverloadGroupDeleteAll(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, editOverloadFixture())
+	result := mustRunEditScript(t, ws, "delete src/a.ts#pick\n")
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	if strings.Contains(text, "pick") {
+		t.Errorf("a bare overload-group ID must delete every declaration of the group:\n%s", text)
+	}
+	if !strings.Contains(text, "function other") {
+		t.Errorf("unrelated declarations must survive:\n%s", text)
+	}
+	if len(result.Ops) != 1 || len(result.Ops[0].Notes) != 1 || !strings.Contains(result.Ops[0].Notes[0], "deleted all 3 overload declarations") {
+		t.Errorf("Ops = %+v, want a 'deleted all 3 overload declarations' note", result.Ops)
+	}
+}
+
+func TestEditOverloadGroupReplaceWhole(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, editOverloadFixture())
+	script := "replace src/a.ts#pick <<EOF\nexport function pick(a: unknown): unknown {\n\treturn a;\n}\nEOF\n"
+	result := mustRunEditScript(t, ws, script)
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	if got := strings.Count(text, "function pick"); got != 1 {
+		t.Errorf("replace over a contiguous overload group must replace the whole group; %d pick declaration(s) remain:\n%s", got, text)
+	}
+	if len(result.Ops) != 1 || len(result.Ops[0].Notes) != 1 || !strings.Contains(result.Ops[0].Notes[0], "replaced all 3 overload declarations") {
+		t.Errorf("Ops = %+v, want a 'replaced all 3 overload declarations' note", result.Ops)
+	}
+}
+
+func TestEditOverloadGroupReplaceNonContiguousRefused(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "interface I {\n\tm(a: number): void;\n}\ninterface I {\n\tm(a: string): void;\n}\nexport const probe: I = { m(_a: any) {} };\n",
+	})
+	script := "replace src/a.ts#I.m <<EOF\nm(a: number | string): void;\nEOF\n"
+	_, err := runEditScript(t, ws, script, nil)
+	if err == nil || cli.ExitCode(err) != cli.ExitUsage {
+		t.Fatalf("expected exit 2, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "line 1: cannot replace src/a.ts#I.m: the 2 overload declarations are not contiguous; replace each ~N individually") {
+		t.Errorf("error = %q", err.Error())
+	}
+}
+
+func TestEditOverloadGroupMoveWhole(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, editOverloadFixture())
+	result := mustRunEditScript(t, ws, "move src/a.ts#pick after src/a.ts#other\n")
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	indexOrder(t, text, "function other", "pick(a: number)", "pick(a: string)", "pick(a: unknown)")
+	if len(result.Ops) != 1 || len(result.Ops[0].Notes) != 1 || !strings.Contains(result.Ops[0].Notes[0], "moved all 3 overload declarations") {
+		t.Errorf("Ops = %+v, want a 'moved all 3 overload declarations' note", result.Ops)
+	}
+}
+
+func TestEditAmbiguousMergedDeclRequiresOrdinal(t *testing.T) {
+	t.Parallel()
+	files := map[string]any{
+		"/project/src/a.ts": "var x = 1;\nvar x = 2;\nexport const y = x;\n",
+	}
+	ws := newTestWorkspace(t, files)
+	_, err := runEditScript(t, ws, "delete src/a.ts#x\n", nil)
+	if err == nil || cli.ExitCode(err) != cli.ExitNotFound {
+		t.Fatalf("expected exit 3 for a bare ambiguous ID, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "matches 2 declarations") || !strings.Contains(err.Error(), "~0") || !strings.Contains(err.Error(), "~1") {
+		t.Errorf("the ambiguity error must list the ~N candidates verbatim: %q", err.Error())
+	}
+
+	ws2 := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "var x = 1;\nvar x = 2;\nexport const y = x;\n",
+	})
+	mustRunEditScript(t, ws2, "delete src/a.ts#x~1\n")
+	text := readWorkspaceFile(t, ws2, "/project/src/a.ts")
+	if !strings.Contains(text, "var x = 1;") || strings.Contains(text, "var x = 2;") {
+		t.Errorf("~1 must address exactly the second declaration:\n%s", text)
+	}
+}
+
+func TestEditDeleteInsertAfterCompose(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export function f1(): number {\n\treturn 1;\n}\n\nexport function f2(): number {\n\treturn 2;\n}\n",
+	})
+	script := "delete src/a.ts#f1\ninsert after src/a.ts#f1 <<EOF\nexport function g(): number {\n\treturn 9;\n}\nEOF\n"
+	result := mustRunEditScript(t, ws, script)
+	if !result.Tx.Applied {
+		t.Fatalf("tx = %+v, want applied", result.Tx)
+	}
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	if strings.Contains(text, "f1") {
+		t.Errorf("f1 must be deleted:\n%s", text)
+	}
+	indexOrder(t, text, "function g", "function f2")
+}
+
+func TestEditDeleteInsertBeforeCompose(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export function f1(): number {\n\treturn 1;\n}\n\nexport function f2(): number {\n\treturn 2;\n}\n",
+	})
+	script := "delete src/a.ts#f2\ninsert before src/a.ts#f2 <<EOF\nexport function g(): number {\n\treturn 9;\n}\nEOF\n"
+	result := mustRunEditScript(t, ws, script)
+	if !result.Tx.Applied {
+		t.Fatalf("tx = %+v, want applied", result.Tx)
+	}
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	if strings.Contains(text, "f2") {
+		t.Errorf("f2 must be deleted:\n%s", text)
+	}
+	indexOrder(t, text, "function f1", "function g")
+}
+
+func TestEditEmptyHeredocBodyExit2(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export function f1(): number {\n\treturn 1;\n}\n",
+	})
+	_, err := runEditScript(t, ws, "insert after src/a.ts#f1 <<EOF\nEOF\n", nil)
+	if err == nil || cli.ExitCode(err) != cli.ExitUsage || !strings.Contains(err.Error(), "line 1: empty body") {
+		t.Errorf("empty heredoc body: got %v, want exit 2 'line 1: empty body'", err)
+	}
+	_, err = runEditScript(t, ws, "replace src/a.ts#f1 <<EOF\nEOF\n", nil)
+	if err == nil || cli.ExitCode(err) != cli.ExitUsage || !strings.Contains(err.Error(), "line 1: empty body") {
+		t.Errorf("empty replace body: got %v, want exit 2 'line 1: empty body'", err)
+	}
+}
+
+func TestEditDeleteFirstDeclCollapsesBOF(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export function f1(): number {\n\treturn 1;\n}\n\nexport function f2(): number {\n\treturn 2;\n}\n",
+	})
+	mustRunEditScript(t, ws, "delete src/a.ts#f1\n")
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	if !strings.HasPrefix(text, "export function f2") {
+		t.Errorf("deleting the first declaration must not leave a blank line at the top of the file:\n%q", text)
+	}
+}
+
+func TestEditInsertCRLFNormalized(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export function f1(): number {\r\n\treturn 1;\r\n}\r\n",
+	})
+	script := "insert after src/a.ts#f1 <<EOF\nexport function g(): number {\n\treturn 9;\n}\nEOF\n"
+	mustRunEditScript(t, ws, script)
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	if !strings.Contains(text, "export function g(): number {\r\n\treturn 9;\r\n}\r\n") {
+		t.Errorf("inserted text must use the file's dominant CRLF line endings:\n%q", text)
+	}
+	if strings.Contains(strings.ReplaceAll(text, "\r\n", ""), "\n") {
+		t.Errorf("the result must not mix line endings:\n%q", text)
+	}
+}
+
+func TestEditWithDepsNoteOnWithinFileMove(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export function f1(): number {\n\treturn 1;\n}\nexport function f2(): number {\n\treturn 2;\n}\n",
+	})
+	result := mustRunEditScript(t, ws, "move src/a.ts#f1 after src/a.ts#f2 with-deps\n")
+	found := false
+	for _, op := range result.Ops {
+		for _, note := range op.Notes {
+			if strings.Contains(note, "with-deps has no effect on within-file moves") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("Ops = %+v, want a with-deps-has-no-effect note", result.Ops)
+	}
+}
+
+func TestEditInsertIntoReplacedContainerConflicts(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export class C {\n\tm(): number {\n\t\treturn 1;\n\t}\n}\n",
+	})
+	script := "replace src/a.ts#C <<EOF\nexport class C {\n\tm(): number {\n\t\treturn 2;\n\t}\n}\nEOF\ninsert into src/a.ts#C <<EOF\n\tx = 1;\nEOF\n"
+	_, err := runEditScript(t, ws, script, nil)
+	if err == nil || cli.ExitCode(err) != cli.ExitUsage {
+		t.Fatalf("expected exit 2, got %v", err)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "conflicts with replace at line 1") || !strings.Contains(msg, "overlapping ranges in src/a.ts") {
+		t.Errorf("conflicts must be line-attributed: %q", msg)
+	}
+	if strings.Contains(msg, "overlapping edits at [") {
+		t.Errorf("raw byte-offset engine errors must never surface: %q", msg)
 	}
 }

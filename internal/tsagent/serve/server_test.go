@@ -395,8 +395,8 @@ func TestStatusFields(t *testing.T) {
 	if status["uptimeSeconds"].(float64) < 0 {
 		t.Errorf("uptimeSeconds = %v, want >= 0", status["uptimeSeconds"])
 	}
-	if policy, _ := status["refactorApplyPolicy"].(string); !strings.Contains(policy, "refused") {
-		t.Errorf("refactorApplyPolicy = %q, want policy text", policy)
+	if policy, _ := status["mutationPolicy"].(string); !strings.Contains(policy, "refused") {
+		t.Errorf("mutationPolicy = %q, want policy text", policy)
 	}
 }
 
@@ -483,6 +483,73 @@ func TestRefactorApplyRefusedWithOverlays(t *testing.T) {
 	}, serve.CodeRefused)
 	if !strings.Contains(rpcErr.Message, "overlays") {
 		t.Errorf("refusal message %q does not mention overlays", rpcErr.Message)
+	}
+}
+
+// TestEditOverRPCRefusedWithOverlays is the regression test for the silent
+// disk-destruction bug: `edit` routed to a daemon holding an overlay used to
+// compute edits against the OVERLAY content and flush the result to disk
+// (a 3-declaration file became 0 bytes). Every mutating command must hit the
+// same guard as refactor --apply, and the disk must stay untouched.
+func TestEditOverRPCRefusedWithOverlays(t *testing.T) {
+	t.Parallel()
+	const original = "export const keep = 1;\nexport function shadow(): number { return keep; }\nexport const alsoKeep = 2;\n"
+	session, fs := newTestSession(t, map[string]any{"/project/src/m.ts": original}, nil)
+	c := startServer(t, session)
+
+	// Shadow the file with overlay content, then try a destructive edit.
+	c.mustResult("session/overlays/set", map[string]any{"file": "src/m.ts", "content": original})
+	rpcErr := c.mustError("edit", serve.Params{
+		Flags: map[string]any{"e": "delete src/m.ts#shadow", "allow-errors": true},
+	}, serve.CodeRefused)
+	if !strings.Contains(rpcErr.Message, "refused over RPC while session overlays are present") {
+		t.Errorf("refusal message = %q, want the shared mutation-policy text", rpcErr.Message)
+	}
+	if text, ok := fs.ReadFile("/project/src/m.ts"); !ok || text != original {
+		t.Fatalf("disk content changed despite the refusal:\n%q", text)
+	}
+
+	// --dry-run does not mutate and stays allowed even with overlays present.
+	c.mustResult("edit", serve.Params{
+		Flags: map[string]any{"e": "delete src/m.ts#shadow", "dry-run": true, "allow-errors": true},
+	})
+	if text, _ := fs.ReadFile("/project/src/m.ts"); text != original {
+		t.Fatalf("dry-run over RPC wrote to disk:\n%q", text)
+	}
+}
+
+// TestEditOverRPCWithoutOverlaysApplies: with no overlays the daemon applies
+// edits normally (same behavior as a local run).
+func TestEditOverRPCWithoutOverlaysApplies(t *testing.T) {
+	t.Parallel()
+	const original = "export const keep = 1;\n\nexport function gone(): number { return 2; }\n"
+	session, fs := newTestSession(t, map[string]any{"/project/src/m.ts": original}, nil)
+	c := startServer(t, session)
+
+	c.mustResult("edit", serve.Params{
+		Flags: map[string]any{"e": "delete src/m.ts#gone"},
+	})
+	text, ok := fs.ReadFile("/project/src/m.ts")
+	if !ok || strings.Contains(text, "gone") || !strings.Contains(text, "keep") {
+		t.Fatalf("edit over RPC without overlays must apply to disk, got %q (ok=%v)", text, ok)
+	}
+}
+
+// TestCheckFixOverRPCRefusedWithOverlays: every command with an --apply path
+// hits the centralized guard, not just the refactor family.
+func TestCheckFixOverRPCRefusedWithOverlays(t *testing.T) {
+	t.Parallel()
+	session, _ := newTestSession(t, map[string]any{"/project/src/a.ts": validA}, nil)
+	c := startServer(t, session)
+
+	c.mustResult("session/overlays/set", map[string]any{"file": "src/a.ts", "content": validA})
+	for _, method := range []string{"check/fix", "refactor/apply-edits", "refactor/organize-imports"} {
+		rpcErr := c.mustError(method, serve.Params{
+			Flags: map[string]any{"apply": true},
+		}, serve.CodeRefused)
+		if !strings.Contains(rpcErr.Message, "refused over RPC while session overlays are present") {
+			t.Errorf("%s refusal message = %q, want the shared mutation-policy text", method, rpcErr.Message)
+		}
 	}
 }
 

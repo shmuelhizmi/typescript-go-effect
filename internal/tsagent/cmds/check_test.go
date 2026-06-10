@@ -52,6 +52,25 @@ func TestCheckFindsPlantedError(t *testing.T) {
 	}
 }
 
+func TestCheckZeroDiagnosticsText(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/ok.ts": `export const fine: number = 1;`,
+	})
+	result, err := runCheck(context.Background(), ws, &checkFlags{}, nil)
+	if err != nil {
+		t.Fatalf("runCheck: %v", err)
+	}
+	var buf strings.Builder
+	out := &cli.Output{W: &buf, Format: cli.FormatText}
+	if err := out.Write(result); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if buf.String() != "0 diagnostics\n" {
+		t.Errorf("clean check text = %q, want \"0 diagnostics\\n\"", buf.String())
+	}
+}
+
 func TestCheckFilters(t *testing.T) {
 	t.Parallel()
 	ws := newTestWorkspace(t, brokenProjectFiles())

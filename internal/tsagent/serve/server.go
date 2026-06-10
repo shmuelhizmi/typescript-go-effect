@@ -331,25 +331,48 @@ func (s *Session) ListSnapshots() []SnapshotInfo {
 	return infos
 }
 
-// refactorApplyPolicy documents the v1 mutation rule (see Server.dispatch):
-// refactor */--apply writes to the real FS through the overlay-wrapped
-// ws.FS, so overlay contents would silently shadow the bytes just written.
-// Until per-file conflict tracking exists, --apply is refused over RPC
-// whenever any overlays are present.
-const refactorApplyPolicy = "refactor --apply is refused over RPC while session overlays are present (overlays would shadow disk writes); drop overlays first"
+// mutationPolicy documents the v1 mutation rule (see Server.dispatch): a
+// mutating invocation (refactor --apply, edit without --dry-run, check fix
+// --apply, …) writes to the real FS through the overlay-wrapped ws.FS, so
+// overlay contents would silently shadow the bytes just written — and worse,
+// the edits would be computed against the OVERLAY content and then flushed
+// over the disk file. Until per-file conflict tracking exists, every mutating
+// command is refused over RPC whenever any overlays are present.
+const mutationPolicy = "refused over RPC while session overlays are present (overlays would shadow disk writes); drop overlays first"
+
+// invocationMutatesDisk reports whether a routed invocation would write
+// through to the real file system, given its fully populated FlagSet. It is
+// keyed on the two transaction-flag conventions every mutating command
+// follows, so new commands are covered automatically:
+//
+//   - dry-run-by-default commands (the refactor family, check fix) define an
+//     --apply flag and mutate only when it is set;
+//   - apply-by-default commands (edit) define a --dry-run flag and mutate
+//     unless it is set.
+//
+// Commands defining neither flag have no write path.
+func invocationMutatesDisk(fs *flag.FlagSet) bool {
+	if f := fs.Lookup("apply"); f != nil {
+		return f.Value.String() == "true"
+	}
+	if f := fs.Lookup("dry-run"); f != nil {
+		return f.Value.String() != "true"
+	}
+	return false
+}
 
 // Status is the session/status result.
 type Status struct {
-	ConfigPath          string         `json:"configPath"`
-	UptimeSeconds       float64        `json:"uptimeSeconds"`
-	ProgramFiles        int            `json:"programFiles"`
-	OverlayCount        int            `json:"overlayCount"`
-	Snapshots           []SnapshotInfo `json:"snapshots"`
-	Rebuilds            int            `json:"rebuilds"`
-	LastBuildMs         float64        `json:"lastBuildMs"`
-	HeapAllocBytes      uint64         `json:"heapAllocBytes"`
-	HeapSysBytes        uint64         `json:"heapSysBytes"`
-	RefactorApplyPolicy string         `json:"refactorApplyPolicy"`
+	ConfigPath     string         `json:"configPath"`
+	UptimeSeconds  float64        `json:"uptimeSeconds"`
+	ProgramFiles   int            `json:"programFiles"`
+	OverlayCount   int            `json:"overlayCount"`
+	Snapshots      []SnapshotInfo `json:"snapshots"`
+	Rebuilds       int            `json:"rebuilds"`
+	LastBuildMs    float64        `json:"lastBuildMs"`
+	HeapAllocBytes uint64         `json:"heapAllocBytes"`
+	HeapSysBytes   uint64         `json:"heapSysBytes"`
+	MutationPolicy string         `json:"mutationPolicy"`
 }
 
 // Status reports daemon health (session/status).
@@ -357,16 +380,16 @@ func (s *Session) Status() Status {
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
 	return Status{
-		ConfigPath:          s.configPath,
-		UptimeSeconds:       time.Since(s.started).Seconds(),
-		ProgramFiles:        len(s.ws.Program.SourceFiles()),
-		OverlayCount:        len(s.overlays),
-		Snapshots:           s.ListSnapshots(),
-		Rebuilds:            s.rebuilds,
-		LastBuildMs:         float64(s.lastBuild) / float64(time.Millisecond),
-		HeapAllocBytes:      mem.HeapAlloc,
-		HeapSysBytes:        mem.HeapSys,
-		RefactorApplyPolicy: refactorApplyPolicy,
+		ConfigPath:     s.configPath,
+		UptimeSeconds:  time.Since(s.started).Seconds(),
+		ProgramFiles:   len(s.ws.Program.SourceFiles()),
+		OverlayCount:   len(s.overlays),
+		Snapshots:      s.ListSnapshots(),
+		Rebuilds:       s.rebuilds,
+		LastBuildMs:    float64(s.lastBuild) / float64(time.Millisecond),
+		HeapAllocBytes: mem.HeapAlloc,
+		HeapSysBytes:   mem.HeapSys,
+		MutationPolicy: mutationPolicy,
 	}
 }
 
@@ -629,20 +652,6 @@ func (srv *Server) dispatch(ctx context.Context, req *Request) (json.RawMessage,
 		return nil, &RPCError{Code: CodeMethodNotFound, Message: fmt.Sprintf("unknown method %q", req.Method)}
 	}
 
-	// v1 mutation policy: see refactorApplyPolicy.
-	if family == "refactor" && truthy(params.Flags["apply"]) && len(srv.session.overlays) > 0 {
-		return nil, &RPCError{Code: CodeRefused, Message: refactorApplyPolicy + " (session/overlays/drop)"}
-	}
-
-	var ws *core.Workspace
-	if cmd.NeedsProgram {
-		fresh, err := srv.session.FreshWorkspace()
-		if err != nil {
-			return nil, &RPCError{Code: CodeInternal, Message: err.Error()}
-		}
-		ws = fresh
-	}
-
 	// Populate the command's flags struct exactly as the CLI would: register
 	// flags on a FlagSet, then Set each param by name with its string form.
 	fs := flag.NewFlagSet(req.Method, flag.ContinueOnError)
@@ -655,6 +664,22 @@ func (srv *Server) dispatch(ctx context.Context, req *Request) (json.RawMessage,
 		if err := fs.Set(k, flagValueString(params.Flags[k])); err != nil {
 			return nil, &RPCError{Code: CodeInvalidParams, Message: fmt.Sprintf("flag --%s: %v", k, err)}
 		}
+	}
+
+	// v1 mutation policy: see mutationPolicy. The predicate is centralized on
+	// the populated FlagSet, never per command, so every present and future
+	// command with a write path is covered.
+	if len(srv.session.overlays) > 0 && invocationMutatesDisk(fs) {
+		return nil, &RPCError{Code: CodeRefused, Message: req.Method + " " + mutationPolicy + " (session/overlays/drop)"}
+	}
+
+	var ws *core.Workspace
+	if cmd.NeedsProgram {
+		fresh, err := srv.session.FreshWorkspace()
+		if err != nil {
+			return nil, &RPCError{Code: CodeInternal, Message: err.Error()}
+		}
+		ws = fresh
 	}
 
 	result, err := cmd.Run(ctx, ws, flagsStruct, params.Args)
@@ -824,16 +849,6 @@ func flagValueString(v any) string {
 	default:
 		return fmt.Sprint(v)
 	}
-}
-
-func truthy(v any) bool {
-	switch t := v.(type) {
-	case bool:
-		return t
-	case string:
-		return t == "true"
-	}
-	return false
 }
 
 func sortedKeys(m map[string]any) []string {

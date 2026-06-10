@@ -104,6 +104,8 @@ flowchart LR
 
 **Pagination.** List-shaped results (`check`, `map search`, `map files`, …) honor the global `--limit N` and `--offset N` flags. Truncation is never silent — text output appends `(showing N of M results; use --limit/--offset to page)` and JSON sets `"truncated": true`.
 
+**Empty results are never silent.** In text mode a clean `check` prints `0 diagnostics`, a no-hit `map search` (and every other list command) prints `0 results`, and summary-style results report their zero explicitly (`nav refs` prints `total: 0`) — so "nothing found" is always distinguishable from "no output".
+
 **Exit codes**
 
 | Code | Meaning |
@@ -120,7 +122,11 @@ flowchart LR
 Most commands accept a *target* in any of three forms:
 
 1. **Position** — `file:line:col` (1-based line and column), e.g. `src/index.ts:11:21`.
-2. **Symbol ID** — `path#qualified.name`, e.g. `src/models.ts#Container.get`. Symbol IDs are printed by `map search`, `map outline --raw`, `nav calls`, and others; paths are always relative to the project root (the tsconfig directory), so IDs are stable regardless of your cwd. The qualified name extends through every *named scope* — functions, classes, namespaces, methods, `const f = () => {}`-style declarators, and **named class/function expressions** (the factory pattern `export const f = (cfg) => class Name extends Base {…}` yields `src/x.ts#f.Name` and `src/x.ts#f.Name.method`, whether the class is the arrow's expression body, a `return class Name …`, or a declarator initializer) — so even function-local declarations have guessable IDs like `src/server.ts#startServer.logRequest` (blocks such as `if`/`for`/`try` are transparent; `map outline --locals` lists them). When sibling scopes declare the same name, a 0-based source-order ordinal disambiguates: `src/a.ts#f.msg~0`, `src/a.ts#f.msg~1`. Only declarations under *anonymous* scopes (callbacks, IIFEs, anonymous class expressions) use the fallback form `path@bytePos`.
+2. **Symbol ID** — `path#qualified.name`, e.g. `src/models.ts#Container.get`. Symbol IDs are printed by `map search`, `map outline --raw`, `nav calls`, and others; paths are always relative to the project root (the tsconfig directory), so IDs are stable regardless of your cwd. The qualified name extends through every *named scope* — functions, classes, namespaces, methods, `const f = () => {}`-style declarators, and **named class/function expressions** (the factory pattern `export const f = (cfg) => class Name extends Base {…}` yields `src/x.ts#f.Name` and `src/x.ts#f.Name.method`, whether the class is the arrow's expression body, a `return class Name …`, or a declarator initializer) — so even function-local declarations have guessable IDs like `src/server.ts#startServer.logRequest` (blocks such as `if`/`for`/`try` are transparent; `map outline --locals` lists them). Ambient module declarations use quoted segments: `src/types.d.ts#"virtual-thing".vt`.
+
+   **`~N` ordinals.** Whenever several declarations share one name path — merged declarations (`interface Foo` + `namespace Foo` + `function Foo`), getter/setter pairs, overload signatures, duplicate `var`s, or same-name declarations in sibling scopes — a 0-based **source-order** ordinal distinguishes them (`src/m.ts#Foo~0`, `…~1`, `…~2`), printed IDs always carry it, and `map outline` shows it on duplicate same-name rows. A bare ID over such a merged symbol is an error listing the `~N` alternatives with their kinds and lines — **except** function/method/constructor overload groups, where the bare ID addresses the whole group (each `~N` still addresses one signature). An out-of-range ordinal errors with the valid range (`ordinal ~7 out of range for src/m.ts#x (2 declarations: ~0..~1)`).
+
+   Only declarations under *anonymous* scopes (callbacks, IIFEs, anonymous class expressions) and computed-name members (`[Symbol.iterator]() {…}`) use the fallback form `path@bytePos`. A `@pos` that lands in trivia — a leading comment, blank lines between declarations, EOF — errors with the file's top-level declaration IDs as suggestions; it never silently resolves to the whole file.
 3. **Name** — `--name <identifier>` resolves a declaration by name project-wide; it must be unambiguous (exits 3 when there are no matches, errors when there are several — disambiguate with `--kind` where supported, or use a symbol ID).
 
 Refactor commands also accept the target as the first positional argument and guess the form (`file:line:col` → position, contains `#`/`@` → symbol ID, otherwise name).
@@ -128,7 +134,7 @@ Refactor commands also accept the target as the first positional argument and gu
 ## Command reference
 
 Global flags (valid on every command, anywhere after `<family> <command>`):
-`--project <tsconfig|dir>` · `--raw` · `--format json|text|ndjson` · `--limit N` · `--offset N` · `--connect never|auto|require` (route through a running `tsagent serve` daemon; see the daemon section)
+`--project <tsconfig|dir>` · `--raw` · `--format json|text|ndjson` · `--limit N` · `--offset N` · `--connect never|auto|require` (route through a running `tsagent serve` daemon; see the daemon section) · `--socket-path <path>` (the daemon socket `--connect` dials, for daemons started with a custom `serve --socket-path`; default: derived from the resolved tsconfig)
 
 ### `edit` — batched symbol-edit scripts
 
@@ -154,7 +160,7 @@ replace <sym> <<EOF … EOF               # replaces the full declaration INCL. 
 delete  <sym>
 ```
 
-**Symbol IDs are guessable.** The ID of any declaration is `path#<names of enclosing functions/classes/namespaces/named-arrow consts, dot-joined>.<name>`; append `~N` only if several declarations share that path. An LLM that has read a file can construct every ID without running a tool (`map outline --locals` prints them all). Unknown IDs fail with closest-match suggestions: `line 1: unknown symbol src/a.ts#helpr; closest: src/a.ts#helper`.
+**Symbol IDs are guessable.** The ID of any declaration is `path#<names of enclosing functions/classes/namespaces/named-arrow consts, dot-joined>.<name>`; append `~N` (0-based, source order) when several declarations share that path — a bare ID over merged declarations errors listing the `~N` candidates, except function/method overload groups, where the bare ID means **the whole group** (`delete` removes every signature, `replace` replaces the contiguous group — non-contiguous groups must be replaced per `~N` — within-file `move` moves the block, and `insert before|after` anchors on the group's first/last declaration). An LLM that has read a file can construct every ID without running a tool (`map outline --locals` prints them all). Unknown IDs fail with closest-match suggestions: `line 1: unknown symbol src/a.ts#helpr; closest: src/a.ts#helper`.
 
 A worked script (one transaction; `tsagent edit tidy.edit` or pipe to `tsagent edit -`):
 
@@ -183,11 +189,13 @@ move src/server.ts#Router end src/router.ts
 
 Output: one `ok line N: <op>` per op (cross-file move notes in parens), the unified diffs, and a summary — `applied: 4 file(s) changed, 0 new errors, 1 fixed` (or `dry-run: 4 file(s) would change`). `--raw` returns `{"ops": [{"line", "op", "files", "notes"}…], "tx": {…}}`.
 
-**Semantics.** All byte offsets address the *original* file text (an `insert after X` anchored on a symbol the same script moves lands at X's original location). Within-file `move` and same-class member reorders are pure text moves — the trivia-aware declaration range travels with its leading JSDoc. Cross-file `move` (anchored `before`/`after` a symbol in another file, or `top`/`end <path>`) reuses the `mv-symbol` planner: imports and `export { X } from` re-exports are rewritten in every consumer, the declaration is exported in the destination when needed, and the source re-imports it if it still uses it — with the same refusals (overloads, default exports, file-local unexported deps unless the move line ends with `with-deps`, which moves the transitive local helpers along, unexported, deps-first). Members cannot move across containers (`use delete + insert into`), function-local declarations cannot move, and `edit` never creates files (use `refactor mv-symbol --create`).
+**Semantics.** All byte offsets address the *original* file text (an `insert after X` anchored on a symbol the same script moves lands at X's original location). Within-file `move` and same-class member reorders are pure text moves — the trivia-aware declaration range travels with its leading JSDoc; `with-deps` on a within-file move has no effect and says so in a note. Cross-file `move` (anchored `before`/`after` a symbol in another file, or `top`/`end <path>`) reuses the `mv-symbol` planner: imports and `export { X } from` re-exports are rewritten in every consumer, the declaration is exported in the destination when needed, and the source re-imports it if it still uses it — with the same refusals (overloads, default exports, file-local unexported deps unless the move line ends with `with-deps`, which moves the transitive local helpers along, unexported, deps-first). Members cannot move across containers (`use delete + insert into`), function-local declarations cannot move, and `edit` never creates files (use `refactor mv-symbol --create`).
 
-**Blank-line hygiene.** Top-level `insert before|after|top|end` ops and the re-insertion half of moves keep exactly one blank line between the inserted block and the adjacent declaration, and a `delete` (or the vacated spot of a move) that would leave a double blank line eats one extra newline. `insert top` (and rewritten/prepended imports everywhere) lands **below** a shebang and the directive prologue, so a leading `"use client";` / `"use strict";` keeps its meaning. When a cross-file move empties the source file (no statements or imports left), the file itself is deleted and a `note:` reports it.
+**Ops compose.** `delete X` + `insert after X` (or `insert before X`) in one script compose: the inserted code lands exactly where X was — after-X content at the deleted range's end, before-X content at its start. Genuinely conflicting ops (two ops rewriting the same bytes, `insert into` a `replace`d container) are refused with line attribution before anything runs. Heredoc bodies must be non-empty (`line N: empty body`, exit 2) and are rewritten to the target file's dominant line endings, so inserting into a CRLF file never produces mixed EOLs.
 
-**Exit codes:** 2 — syntax errors, illegal ops, or overlapping ops (`line 6: delete src/a.ts#f conflicts with replace at line 1 (overlapping ranges in src/a.ts)`); 3 — unresolvable symbols/paths (all reported together, with suggestions); 4 — diagnostics-gate refusal (nothing written; the new errors are listed).
+**Blank-line hygiene.** Top-level `insert before|after|top|end` ops and the re-insertion half of moves keep exactly one blank line between the inserted block and the adjacent declaration, and a `delete` (or the vacated spot of a move) that would leave a double blank line eats one extra newline — including at the very top of the file (deleting the first declaration leaves no leading blank line). `insert top` (and rewritten/prepended imports everywhere) lands **below** a shebang and the directive prologue, so a leading `"use client";` / `"use strict";` keeps its meaning. When a delete or cross-file move empties a file (nothing but whitespace left), the file itself is deleted and a `note:` reports it.
+
+**Exit codes:** 2 — syntax errors, illegal ops, or overlapping ops (`line 6: delete src/a.ts#f conflicts with replace at line 1 (overlapping ranges in src/a.ts)`); 3 — unresolvable symbols/paths (all reported together, with suggestions; ambiguous bare IDs list their `~N` alternatives); 4 — diagnostics-gate refusal (nothing written; the new errors are listed).
 
 ### `map` — orientation
 
@@ -405,6 +413,8 @@ Every `refactor` command (and `check fix`) follows the same contract (**exceptio
 4. **`--allow-errors` bypasses the gate** when you know what you're doing.
 5. The result reports the diagnostics delta (`newErrors`, `unusedWarnings`, `fixedErrors`) so an agent immediately knows the consequences of its edit.
 
+On very large programs (> 2000 files) the gate — and the speculative `check --with-diff`/`--with-edits` below — announces the rebuild with a one-line stderr note (`tsagent: type-checking project (16015 files)…`), so a multi-minute type-check never reads as a hang; stdout stays machine-clean.
+
 ## Speculative checks: `--with-diff` / `--with-edits`
 
 `check` can answer "what would the diagnostics be **if** I applied this change?" without touching disk. The patch is applied to an in-memory overlay file system, a fresh program is built, and the diagnostics deltas are classified as `new` / `fixed` / `moved` / `unchanged`.
@@ -454,7 +464,7 @@ Admin methods:
 - `session/reload` — force a full program rebuild.
 - `session/shutdown` — stop the daemon.
 
-Errors map the CLI exit codes onto JSON-RPC codes (`-32602` invalid params, `-32001` not found, `-32002` refused, `-32003` partial). Safety: `refactor --apply` is refused over RPC while overlays are present (overlays would shadow the disk writes) — drop overlays first. `tsagent serve status|stop|reload|overlay|snapshot` are thin one-shot clients for the socket.
+Errors map the CLI exit codes onto JSON-RPC codes (`-32602` invalid params, `-32001` not found, `-32002` refused, `-32003` partial). Safety: **every mutating invocation** — `refactor … --apply`, `edit` (which applies by default; `--dry-run` stays allowed), `check fix --apply` — is refused over RPC while session overlays are present: the edits would be computed against the overlay content and then flushed over the disk file. Drop overlays first (`session/overlays/drop`). The guard is a single routing-layer predicate keyed on the shared `--apply`/`--dry-run` transaction-flag conventions, so future mutating commands are covered automatically; the policy text is reported by `session/status` as `mutationPolicy`. `tsagent serve status|stop|reload|overlay|snapshot` are thin one-shot clients for the socket; their replies render as compact `key: value` text by default (`--raw` for JSON), like every other command.
 
 ### `--connect`: routing one-shot commands through the daemon
 
@@ -464,7 +474,7 @@ Every non-`serve` command takes the global flag `--connect never|auto|require`:
 - `auto` — if the project's daemon socket exists, run the command on the daemon (warm program, overlays visible); if the daemon is unreachable, print a note to stderr and fall back to a local run.
 - `require` — fail (exit 1) if the daemon cannot be reached.
 
-The daemon renders text/ndjson through the same output layer, so routed output is byte-identical to a local run, exit codes included. The `serve` family itself always runs locally, and streaming commands (`check watch`) are not suitable for routing.
+The global `--socket-path <path>` flag points routing at a daemon started with a custom `serve --socket-path`; without it the per-project default path is derived from the resolved tsconfig. The daemon renders text/ndjson through the same output layer, so routed output is byte-identical to a local run, exit codes included. The `serve` family itself always runs locally, and streaming commands (`check watch`) are not suitable for routing.
 
 ### Overlay snapshots
 

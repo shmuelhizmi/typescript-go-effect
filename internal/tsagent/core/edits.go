@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 
@@ -169,9 +170,13 @@ func (es *EditSet) AddDocumentChanges(ws *Workspace, changes []lsproto.TextDocum
 // Applying edits
 
 // normalizeTextChanges sorts edits ascending by position (the contract of
-// core.ApplyBulkEdits), drops exact duplicates, and rejects overlaps.
+// core.ApplyBulkEdits), drops exact duplicates, composes zero-width inserts
+// that fall inside a deletion (they move to the deletion's end, so text
+// inserted "after X" lands where a deleted X was), and rejects genuine
+// overlaps.
 func normalizeTextChanges(fileName string, textLen int, edits []core.TextChange) ([]core.TextChange, error) {
 	sorted := slices.Clone(edits)
+	composeInsertsWithDeletions(sorted)
 	slices.SortStableFunc(sorted, func(a, b core.TextChange) int {
 		if a.Pos() != b.Pos() {
 			return a.Pos() - b.Pos()
@@ -197,6 +202,39 @@ func normalizeTextChanges(fileName string, textLen int, edits []core.TextChange)
 		result = append(result, edit)
 	}
 	return result, nil
+}
+
+// composeInsertsWithDeletions repositions zero-width inserts whose position
+// falls strictly inside a deletion range (NewText == "") to that deletion's
+// end. This is how `delete X` + `insert after X` compose: blank-line
+// collapsing can widen X's deletion range past the insert anchor, and the
+// inserted text belongs where the deleted declaration was. Inserts inside a
+// replacement (NewText != "") are genuine overlaps and still error.
+func composeInsertsWithDeletions(edits []core.TextChange) {
+	var deletions []core.TextRange
+	for _, e := range edits {
+		if e.End() > e.Pos() && e.NewText == "" {
+			deletions = append(deletions, e.TextRange)
+		}
+	}
+	if len(deletions) == 0 {
+		return
+	}
+	slices.SortFunc(deletions, func(a, b core.TextRange) int { return a.Pos() - b.Pos() })
+	for i, e := range edits {
+		if e.Pos() != e.End() {
+			continue
+		}
+		pos := e.Pos()
+		for _, d := range deletions { // ascending: chains across adjacent deletions settle
+			if d.Pos() < pos && pos < d.End() {
+				pos = d.End()
+			}
+		}
+		if pos != e.Pos() {
+			edits[i].TextRange = core.NewTextRange(pos, pos)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -538,6 +576,7 @@ func Execute(ctx context.Context, ws *Workspace, es EditSet, opts TxOpts) (*TxRe
 
 	// Diagnostics gate: build the post-edit program speculatively and diff
 	// error diagnostics against the current program.
+	NoteLargeTypeCheck(ws)
 	newErrors, fixed, err := diagnosticsDelta(ctx, ws, plan, opts.SingleThreaded)
 	if err != nil {
 		return nil, fmt.Errorf("building speculative program for the diagnostics gate: %w", err)
@@ -592,6 +631,21 @@ func Execute(ctx context.Context, ws *Workspace, es EditSet, opts TxOpts) (*TxRe
 
 // ---------------------------------------------------------------------------
 // Diagnostics delta
+
+// largeTypeCheckFiles is the program size beyond which speculative
+// type-checks announce themselves on stderr before running (they can take
+// minutes on very large projects, and silence reads as a hang).
+const largeTypeCheckFiles = 2000
+
+// NoteLargeTypeCheck prints a one-line stderr progress note before a full
+// speculative type-check (the transaction gate, `check --with-diff/-edits`)
+// when the program exceeds largeTypeCheckFiles; smaller programs stay silent.
+// stderr keeps machine-readable stdout untouched in every output format.
+func NoteLargeTypeCheck(ws *Workspace) {
+	if n := len(ws.Program.SourceFiles()); n > largeTypeCheckFiles {
+		fmt.Fprintf(os.Stderr, "tsagent: type-checking project (%d files)…\n", n)
+	}
+}
 
 type txDiagEntry struct {
 	key  string

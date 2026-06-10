@@ -196,6 +196,9 @@ func (r *OutlineResult) WriteItemText(w io.Writer, item any) error {
 
 func writeOutlineEntriesText(w io.Writer, entries []*OutlineEntry, depth int) error {
 	for _, e := range entries {
+		// Merged/duplicate declarations share a name; surface the symbol ID's
+		// ~N ordinal so same-name rows stay distinguishable in text mode.
+		name := e.Name + outlineOrdinalSuffix(e.SymbolID)
 		exported := ""
 		if e.Exported {
 			exported = "  [export]"
@@ -212,7 +215,7 @@ func writeOutlineEntriesText(w io.Writer, entries []*OutlineEntry, depth int) er
 		if e.Doc != "" {
 			doc = "  // " + e.Doc
 		}
-		if _, err := fmt.Fprintf(w, "%s%s %s%s%s%s  (%d-%d)%s\n", cli.Indent(depth), e.Kind, e.Name, signature, exported, refs, e.Line, e.EndLine, doc); err != nil {
+		if _, err := fmt.Fprintf(w, "%s%s %s%s%s%s  (%d-%d)%s\n", cli.Indent(depth), e.Kind, name, signature, exported, refs, e.Line, e.EndLine, doc); err != nil {
 			return err
 		}
 		if err := writeOutlineEntriesText(w, e.Children, depth+1); err != nil {
@@ -220,6 +223,22 @@ func writeOutlineEntriesText(w io.Writer, entries []*OutlineEntry, depth int) er
 		}
 	}
 	return nil
+}
+
+// outlineOrdinalSuffix extracts the trailing `~N` source-order ordinal from a
+// symbol ID (merged/duplicate declarations carry one) so text-mode outlines
+// can distinguish same-name rows. Returns "" when the ID has no ordinal.
+func outlineOrdinalSuffix(id string) string {
+	i := strings.LastIndexByte(id, '~')
+	if i < 0 || i == len(id)-1 {
+		return ""
+	}
+	for _, c := range id[i+1:] {
+		if c < '0' || c > '9' {
+			return ""
+		}
+	}
+	return id[i:]
 }
 
 func parseDepth(s string) (int, error) {

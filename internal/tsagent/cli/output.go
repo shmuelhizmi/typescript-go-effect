@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // SchemaVersion is the version stamped on every JSON result.
@@ -45,6 +47,13 @@ type Texter interface {
 	WriteText(w io.Writer) error
 }
 
+// ZeroTexter lets a Lister customize the line text mode prints when the
+// result has no items at all (default: "0 results"). Empty results are never
+// silent — an agent must be able to tell "nothing found" from "no output".
+type ZeroTexter interface {
+	ZeroText() string
+}
+
 // Output writes command results in the configured format.
 type Output struct {
 	W      io.Writer
@@ -77,6 +86,12 @@ func (o *Output) Write(result any) error {
 	case FormatText:
 		if t, ok := result.(Texter); ok {
 			return t.WriteText(o.W)
+		}
+		// Pre-encoded JSON results (daemon admin replies routed through
+		// `serve status|stop|reload|overlay|snapshot`) get the generic
+		// compact text rendering instead of a JSON dump.
+		if raw, ok := result.(json.RawMessage); ok {
+			return writeRawJSONText(o.W, raw)
 		}
 		return o.writeJSON(resultEnvelope{SchemaVersion: SchemaVersion, Result: result})
 	default:
@@ -117,6 +132,14 @@ func (o *Output) writeList(list Lister) error {
 			Items:         []any{},
 		})
 	case FormatText:
+		if list.Total() == 0 {
+			zero := "0 results"
+			if z, ok := list.(ZeroTexter); ok {
+				zero = z.ZeroText()
+			}
+			_, err := fmt.Fprintln(o.W, zero)
+			return err
+		}
 		for _, item := range items {
 			if err := list.WriteItemText(o.W, item); err != nil {
 				return err
@@ -142,4 +165,178 @@ func (o *Output) writeJSON(v any) error {
 	enc := json.NewEncoder(o.W)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+// ---------------------------------------------------------------------------
+// Generic text rendering of pre-encoded JSON
+
+// writeRawJSONText renders an arbitrary JSON value as compact text: objects
+// become one `key: value` line per field (insertion order preserved), nested
+// composites indent one level, arrays print one element per line (all-scalar
+// objects inline as `k: v  k: v`), and empty composites print `(none)`.
+func writeRawJSONText(w io.Writer, raw json.RawMessage) error {
+	return writeJSONTextValue(w, raw, 0)
+}
+
+func writeJSONTextValue(w io.Writer, raw json.RawMessage, depth int) error {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return nil
+	}
+	switch raw[0] {
+	case '{':
+		pairs, err := decodeOrderedObject(raw)
+		if err != nil {
+			return err
+		}
+		if len(pairs) == 0 {
+			_, err := fmt.Fprintf(w, "%s(none)\n", Indent(depth))
+			return err
+		}
+		for _, p := range pairs {
+			if isCompositeJSON(p.value) && !isEmptyCompositeJSON(p.value) {
+				if _, err := fmt.Fprintf(w, "%s%s:\n", Indent(depth), p.key); err != nil {
+					return err
+				}
+				if err := writeJSONTextValue(w, p.value, depth+1); err != nil {
+					return err
+				}
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "%s%s: %s\n", Indent(depth), p.key, jsonScalarText(p.value)); err != nil {
+				return err
+			}
+		}
+		return nil
+	case '[':
+		elems, err := decodeJSONArray(raw)
+		if err != nil {
+			return err
+		}
+		if len(elems) == 0 {
+			_, err := fmt.Fprintf(w, "%s(none)\n", Indent(depth))
+			return err
+		}
+		for _, e := range elems {
+			if line, ok := inlineObjectText(e); ok {
+				if _, err := fmt.Fprintf(w, "%s%s\n", Indent(depth), line); err != nil {
+					return err
+				}
+				continue
+			}
+			if isCompositeJSON(e) {
+				if err := writeJSONTextValue(w, e, depth); err != nil {
+					return err
+				}
+				continue
+			}
+			if _, err := fmt.Fprintf(w, "%s%s\n", Indent(depth), jsonScalarText(e)); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
+		_, err := fmt.Fprintf(w, "%s%s\n", Indent(depth), jsonScalarText(raw))
+		return err
+	}
+}
+
+type jsonPair struct {
+	key   string
+	value json.RawMessage
+}
+
+// decodeOrderedObject decodes a JSON object preserving field order (a plain
+// map unmarshal would lose it).
+func decodeOrderedObject(raw json.RawMessage) ([]jsonPair, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if _, err := dec.Token(); err != nil { // consume '{'
+		return nil, err
+	}
+	var pairs []jsonPair
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, _ := keyTok.(string)
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return nil, err
+		}
+		pairs = append(pairs, jsonPair{key: key, value: value})
+	}
+	return pairs, nil
+}
+
+func decodeJSONArray(raw json.RawMessage) ([]json.RawMessage, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if _, err := dec.Token(); err != nil { // consume '['
+		return nil, err
+	}
+	var elems []json.RawMessage
+	for dec.More() {
+		var e json.RawMessage
+		if err := dec.Decode(&e); err != nil {
+			return nil, err
+		}
+		elems = append(elems, e)
+	}
+	return elems, nil
+}
+
+// inlineObjectText renders an all-scalar object as one compact line
+// (`file: /a.ts  bytes: 12`); ok is false when the object nests composites.
+func inlineObjectText(raw json.RawMessage) (string, bool) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || raw[0] != '{' {
+		return "", false
+	}
+	pairs, err := decodeOrderedObject(raw)
+	if err != nil || len(pairs) == 0 {
+		return "", false
+	}
+	parts := make([]string, len(pairs))
+	for i, p := range pairs {
+		if isCompositeJSON(p.value) {
+			return "", false
+		}
+		parts[i] = p.key + ": " + jsonScalarText(p.value)
+	}
+	return strings.Join(parts, "  "), true
+}
+
+func isCompositeJSON(raw json.RawMessage) bool {
+	raw = bytes.TrimSpace(raw)
+	return len(raw) > 0 && (raw[0] == '{' || raw[0] == '[')
+}
+
+func isEmptyCompositeJSON(raw json.RawMessage) bool {
+	var v []json.RawMessage
+	switch {
+	case len(raw) == 0:
+		return true
+	case raw[0] == '[':
+		err := json.Unmarshal(raw, &v)
+		return err == nil && len(v) == 0
+	case raw[0] == '{':
+		var m map[string]json.RawMessage
+		err := json.Unmarshal(raw, &m)
+		return err == nil && len(m) == 0
+	}
+	return false
+}
+
+// jsonScalarText renders a scalar JSON value: strings unquoted, everything
+// else (numbers, booleans, null, and empty composites) verbatim.
+func jsonScalarText(raw json.RawMessage) string {
+	raw = bytes.TrimSpace(raw)
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	if isEmptyCompositeJSON(raw) && (len(raw) > 0 && (raw[0] == '[' || raw[0] == '{')) {
+		return "(none)"
+	}
+	return string(raw)
 }

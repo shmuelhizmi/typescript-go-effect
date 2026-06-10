@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/microsoft/typescript-go/internal/tsagent/cli"
 )
 
 const indexSource = `import { helper } from "./util";
@@ -178,6 +180,43 @@ func TestMapSearch(t *testing.T) {
 	// Exact match sorts first.
 	if result.Matches[0].Name != "greet" {
 		t.Errorf("expected exact match first, got %q", result.Matches[0].Name)
+	}
+}
+
+func TestMapOutlineTextShowsMergedOrdinals(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/m.ts": "export interface Foo { a: number }\nexport namespace Foo { export const b = 1; }\n",
+	})
+	result, err := runMapOutline(context.Background(), ws, &outlineFlags{depth: "all"}, []string{"src/m.ts"})
+	if err != nil {
+		t.Fatalf("runMapOutline: %v", err)
+	}
+	var buf strings.Builder
+	out := &cli.Output{W: &buf, Format: cli.FormatText}
+	if err := out.Write(result); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	text := buf.String()
+	if !strings.Contains(text, "Foo~0") || !strings.Contains(text, "Foo~1") {
+		t.Errorf("text outline must show the ~N ordinals on merged same-name rows:\n%s", text)
+	}
+}
+
+func TestMapSearchZeroResultsText(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, testProjectFiles())
+	result, err := runMapSearch(context.Background(), ws, &searchFlags{}, []string{"zzznosuchsymbol"})
+	if err != nil {
+		t.Fatalf("runMapSearch: %v", err)
+	}
+	var buf strings.Builder
+	out := &cli.Output{W: &buf, Format: cli.FormatText}
+	if err := out.Write(result); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if buf.String() != "0 results\n" {
+		t.Errorf("no-hit search text = %q, want \"0 results\\n\"", buf.String())
 	}
 }
 

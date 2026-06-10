@@ -20,11 +20,16 @@ import (
 // segments are declaration names from the module root: module exports →
 // members, extended through every named scope (functions, methods,
 // namespaces, and `const f = () => {}`-style declarators). Blocks
-// (if/for/try/...) are transparent. Declarations under anonymous scopes
-// (callbacks, IIFEs) fall back to the position encoding `relpath@pos`. A
-// `~N` suffix on the final segment selects the N-th declaration of
-// merged/overloaded symbols (symbol-table resolution) or the N-th
-// source-order match when sibling scopes declare the same name.
+// (if/for/try/...) are transparent. Quoted segments name ambient modules
+// (`relpath#"virtual-thing".vt`). Declarations under anonymous scopes
+// (callbacks, IIFEs) and computed-name members fall back to the position
+// encoding `relpath@pos`. A `~N` suffix on the final segment selects the
+// N-th SOURCE-ORDER declaration when several declarations share the same
+// name path: merged declarations (interface+namespace+function), get/set
+// accessor pairs, overload signatures, duplicate vars, and same-name
+// declarations in sibling scopes. Bare IDs over several declarations are an
+// error listing the `~N` alternatives — except function/method/constructor
+// overload groups, where the bare ID addresses the whole group.
 
 // EncodeSymbolID renders a stable ID for a symbol, or "" when the symbol has
 // no declarations (e.g. some synthesized symbols). Symbols whose primary
@@ -44,6 +49,13 @@ func EncodeSymbolID(ws *Workspace, symbol *ast.Symbol) string {
 	}
 	rel := ws.RelPath(file.FileName())
 	if id, ok := encodeViaSymbolParents(rel, symbol); ok {
+		// Merged non-overload symbols carry the primary declaration's
+		// source-order ordinal so the printed ID stays decodable (a bare ID
+		// over merged declarations is an ambiguity error); overload groups
+		// decode bare as the whole group.
+		if decls := orderedDeclsInFile(symbol, file); len(decls) > 1 && !isOverloadGroup(decls) {
+			return id + mergedOrdinalSuffix(symbol, file, decl)
+		}
 		return id
 	}
 	return positionFallbackID(rel, file, decl)
@@ -68,7 +80,7 @@ func EncodeDeclID(ws *Workspace, node *ast.Node) string {
 	rel := ws.RelPath(file.FileName())
 	if symbol := node.Symbol(); symbol != nil {
 		if id, ok := encodeViaSymbolParents(rel, symbol); ok {
-			return id
+			return id + mergedOrdinalSuffix(symbol, file, node)
 		}
 	}
 	if segments, ok := scopeChainSegments(node); ok {
@@ -91,15 +103,88 @@ func primaryDeclaration(symbol *ast.Symbol) *ast.Node {
 	return nil
 }
 
+// orderedDeclsInFile returns symbol's declarations located in file, in
+// source order. This is the declaration list that `~N` ordinals index for
+// merged symbols (the binder's Declarations order is symbol-internal, not
+// source order).
+func orderedDeclsInFile(symbol *ast.Symbol, file *ast.SourceFile) []*ast.Node {
+	var decls []*ast.Node
+	for _, d := range symbol.Declarations {
+		if ast.GetSourceFileOfNode(d) == file {
+			decls = append(decls, d)
+		}
+	}
+	slices.SortStableFunc(decls, func(a, b *ast.Node) int { return a.Pos() - b.Pos() })
+	return decls
+}
+
+// isOverloadGroup reports whether the (same-symbol) declarations form a
+// function/method/constructor overload group: two or more signatures plus at
+// most one implementation of the same callable. Bare IDs address the whole
+// group; merged declarations of mixed kinds (interface+namespace, get/set
+// pairs, duplicate vars) are not groups and require a `~N` ordinal.
+func isOverloadGroup(decls []*ast.Node) bool {
+	if len(decls) < 2 {
+		return false
+	}
+	for _, d := range decls {
+		switch d.Kind {
+		case ast.KindFunctionDeclaration, ast.KindMethodDeclaration, ast.KindMethodSignature, ast.KindConstructor:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// OverloadGroupDecls returns the source-ordered declarations of symbol in
+// file when they form a function/method/constructor overload group with more
+// than one declaration; nil otherwise. A bare symbol ID (no `~N` ordinal)
+// addresses the whole group, so batch editors can expand delete/replace/move
+// over every signature.
+func OverloadGroupDecls(symbol *ast.Symbol, file *ast.SourceFile) []*ast.Node {
+	if symbol == nil || file == nil {
+		return nil
+	}
+	decls := orderedDeclsInFile(symbol, file)
+	if isOverloadGroup(decls) {
+		return decls
+	}
+	return nil
+}
+
+// mergedOrdinalSuffix returns the `~N` source-order ordinal for node when its
+// symbol has several declarations in file (merged declarations, get/set
+// pairs, overload signatures, duplicate vars), making every printed ID unique
+// and round-trippable. Unique declarations return "" so previously-unique IDs
+// stay byte-identical.
+func mergedOrdinalSuffix(symbol *ast.Symbol, file *ast.SourceFile, node *ast.Node) string {
+	decls := orderedDeclsInFile(symbol, file)
+	if len(decls) < 2 {
+		return ""
+	}
+	idx := slices.Index(decls, node)
+	if idx < 0 {
+		return ""
+	}
+	return "~" + strconv.Itoa(idx)
+}
+
 // encodeViaSymbolParents renders the qualified ID through the symbol parent
 // chain (module exports → members). ok is false when the chain does not
-// reach the file and the outermost symbol is not a top-level declaration.
+// reach the file and the outermost symbol is not a top-level declaration, or
+// when a segment cannot be named decodably (computed-name members).
 func encodeViaSymbolParents(rel string, symbol *ast.Symbol) (string, bool) {
 	var segments []string
 	top := symbol
 	for cur := symbol; cur != nil; cur = cur.Parent {
 		if isFileModuleSymbol(cur) {
 			return rel + "#" + strings.Join(segments, "."), true
+		}
+		if cur.Name == ast.InternalSymbolNameComputed {
+			// Computed-name members ([Symbol.iterator]() {…}) have no
+			// decodable name segment: keep the position fallback.
+			return "", false
 		}
 		segments = append([]string{encodeSegment(cur.Name)}, segments...)
 		top = cur
@@ -208,13 +293,15 @@ func DecodeSymbolID(ctx context.Context, ws *Workspace, id string) (*ast.Symbol,
 	binder.BindSourceFile(file)
 
 	declIndex := -1
-	segments := strings.Split(id[hash+1:], ".")
+	baseID := id
+	segments := splitIDSegments(id[hash+1:])
 	if len(segments) > 0 {
 		last := segments[len(segments)-1]
 		if tilde := strings.LastIndexByte(last, '~'); tilde >= 0 {
 			if n, err := strconv.Atoi(last[tilde+1:]); err == nil {
 				declIndex = n
 				segments[len(segments)-1] = last[:tilde]
+				baseID = id[:strings.LastIndexByte(id, '~')]
 			}
 		}
 	}
@@ -227,12 +314,25 @@ func DecodeSymbolID(ctx context.Context, ws *Workspace, id string) (*ast.Symbol,
 		return nil, nil, fmt.Errorf("symbol %q: %w", id, ErrNotFound)
 	}
 	if symbol != nil {
-		decl := symbol.ValueDeclaration
-		if declIndex >= 0 && declIndex < len(symbol.Declarations) {
-			decl = symbol.Declarations[declIndex]
+		decls := orderedDeclsInFile(symbol, file)
+		if len(decls) == 0 {
+			decls = symbol.Declarations
 		}
-		if decl == nil && len(symbol.Declarations) > 0 {
-			decl = symbol.Declarations[0]
+		if declIndex >= 0 {
+			if declIndex >= len(decls) {
+				return nil, nil, ordinalRangeError(baseID, declIndex, len(decls))
+			}
+			return symbol, decls[declIndex], nil
+		}
+		// A bare ID over several same-file declarations is ambiguous — except
+		// overload groups, which the bare ID addresses as a whole (the primary
+		// declaration is returned; callers expand via OverloadGroupDecls).
+		if len(decls) > 1 && !isOverloadGroup(decls) {
+			return nil, nil, ambiguousDeclsError(ws, id, file, decls)
+		}
+		decl := symbol.ValueDeclaration
+		if decl == nil && len(decls) > 0 {
+			decl = decls[0]
 		}
 		return symbol, decl, nil
 	}
@@ -242,7 +342,7 @@ func DecodeSymbolID(ctx context.Context, ws *Workspace, id string) (*ast.Symbol,
 	switch {
 	case declIndex >= 0:
 		if declIndex >= len(matches) {
-			return nil, nil, fmt.Errorf("symbol %q: ordinal ~%d out of range (%d declarations): %w", id, declIndex, len(matches), ErrNotFound)
+			return nil, nil, ordinalRangeError(baseID, declIndex, len(matches))
 		}
 		decl = matches[declIndex]
 	case len(matches) > 1:
@@ -281,20 +381,111 @@ func decodePositionID(ctx context.Context, ws *Workspace, path string, posText s
 		return nil, nil, fmt.Errorf("position %d out of range for %s: %w", pos, path, ErrInvalidArgument)
 	}
 	token := astnav.GetTouchingToken(file, pos)
-	if token == nil {
-		return nil, nil, fmt.Errorf("no token at %s@%d: %w", path, pos, ErrNotFound)
+	var symbol *ast.Symbol
+	if token != nil {
+		checker, done := ws.Program.GetTypeCheckerForFile(ctx, file)
+		defer done()
+		symbol = checker.GetSymbolAtLocation(token)
 	}
-	checker, done := ws.Program.GetTypeCheckerForFile(ctx, file)
-	defer done()
-	symbol := checker.GetSymbolAtLocation(token)
-	if symbol == nil {
-		return nil, nil, fmt.Errorf("no symbol at %s@%d: %w", path, pos, ErrNotFound)
+	// Positions within a computed property name ([Symbol.iterator]() {…}) are
+	// the fallback IDs the encoder emits for computed-name members: resolve
+	// them to the enclosing member declaration.
+	if symbol == nil && token != nil {
+		for n := token; n != nil && n.Kind != ast.KindSourceFile; n = n.Parent {
+			if n.Kind == ast.KindComputedPropertyName {
+				if member := n.Parent; member != nil {
+					symbol = member.Symbol()
+				}
+				break
+			}
+		}
 	}
-	decl := symbol.ValueDeclaration
-	if decl == nil && len(symbol.Declarations) > 0 {
-		decl = symbol.Declarations[0]
+	var decl *ast.Node
+	if symbol != nil {
+		decl = symbol.ValueDeclaration
+		if decl == nil && len(symbol.Declarations) > 0 {
+			decl = symbol.Declarations[0]
+		}
+	}
+	// Positions in file-leading trivia resolve to the SourceFile's own symbol
+	// — never hand that back as "the declaration" (a delete would wipe the
+	// whole file); positions in trivia between declarations and at EOF
+	// resolve to nothing.
+	if decl == nil || decl.Kind == ast.KindSourceFile {
+		return nil, nil, noDeclarationAtError(ws, file, path, pos)
 	}
 	return symbol, decl, nil
+}
+
+// noDeclarationAtError renders the @pos miss error with up to three
+// top-level declaration IDs as suggestions.
+func noDeclarationAtError(ws *Workspace, file *ast.SourceFile, path string, pos int) error {
+	suffix := ""
+	if ids := topLevelDeclIDs(ws, file, 3); len(ids) > 0 {
+		suffix = "; top-level declarations: " + strings.Join(ids, ", ")
+	}
+	return BadAddressErrorf("no declaration at position %d in %s%s", pos, path, suffix)
+}
+
+// topLevelDeclIDs returns the qualified IDs of the first max top-level
+// declarations of file (used as suggestions in @pos miss errors).
+func topLevelDeclIDs(ws *Workspace, file *ast.SourceFile, max int) []string {
+	var decls []*ast.Node
+	for _, s := range file.Statements.Nodes {
+		collectScopeDecls(s, &decls)
+	}
+	ids := make([]string, 0, max)
+	for _, d := range decls {
+		if id := EncodeDeclID(ws, d); strings.Contains(id, "#") {
+			ids = append(ids, id)
+			if len(ids) == max {
+				break
+			}
+		}
+	}
+	return ids
+}
+
+// ordinalRangeError renders the out-of-range `~N` error for both decode
+// phases: `ordinal ~7 out of range for src/m.ts#x (2 declarations: ~0..~1)`.
+func ordinalRangeError(baseID string, declIndex int, count int) error {
+	return BadAddressErrorf("ordinal ~%d out of range for %s (%d declarations: ~0..~%d)",
+		declIndex, baseID, count, count-1)
+}
+
+// ambiguousDeclsError renders the bare-ID-over-merged-declarations error,
+// listing every `~N` alternative with its kind and line.
+func ambiguousDeclsError(ws *Workspace, id string, file *ast.SourceFile, decls []*ast.Node) error {
+	parts := make([]string, len(decls))
+	for i, d := range decls {
+		line, _ := ws.PosToLineCol(file, astnav.GetStartOfNode(d, file, false /*includeJSDoc*/))
+		parts[i] = fmt.Sprintf("~%d %s (line %d)", i, DeclarationKind(d), line)
+	}
+	return BadAddressErrorf("ambiguous: %s matches %d declarations: %s", id, len(decls), strings.Join(parts, ", "))
+}
+
+// splitIDSegments splits the qualified-name part of a symbol ID on '.'
+// outside double quotes, so quoted ambient-module segments may contain dots
+// (`"pkg/sub.thing".vt` is two segments).
+func splitIDSegments(s string) []string {
+	if !strings.Contains(s, `"`) {
+		return strings.Split(s, ".")
+	}
+	var segments []string
+	start := 0
+	inQuote := false
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '"':
+			inQuote = !inQuote
+		case '.':
+			if !inQuote {
+				segments = append(segments, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return append(segments, s[start:])
 }
 
 // resolveChain resolves dot segments against a bound file: symbol tables
