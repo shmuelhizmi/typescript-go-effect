@@ -25,30 +25,14 @@ These rules are **the** semantics of EffectScript (SPEC §14).
 * `export effect f ...` → `export const f = ...`;
   `export default effect f ...` → `const f = ...; export default f;`.
 
-### 1.2 Decorated `effect` declaration
-
-Decorators compose inside `Effect.fn`'s variadic pipe arguments, top decorator
-**last** (so it is outermost, matching decorator intuition):
-
-```
-⟦ @d1 @d2 effect f(p): T { body } ⟧ =
-  const f = Effect.fn("f")(function* (p) { body' }, ⟦d2⟧, ⟦d1⟧);
-```
-
-(`Effect.fn(name)` accepts pipe combinators after the generator argument.)
-
-Well-known bare names resolve to `Effect.*`: `@retry(s)` → `Effect.retry(s)`,
-`@timeout(t)` → `Effect.timeout(t)`, `@withSpan(n)` → `Effect.withSpan(n)`,
-`@uninterruptible` → `Effect.uninterruptible`, etc., unless the name is in scope.
-
-### 1.3 `effect` expressions
+### 1.2 `effect` expressions
 
 ```
 ⟦ effect (params) { body } ⟧ = Effect.fn(function* (params) { body' })
 ⟦ effect { body } ⟧          = Effect.gen(function* () { body' })
 ```
 
-### 1.4 `effect` class methods
+### 1.3 `effect` class methods
 
 ```
 class C {

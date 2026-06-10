@@ -342,25 +342,20 @@ func (p *Parser) parseEffectDeclaration(pos int, modifiers *ast.ModifierList) *a
 	body := p.parseEffectFunctionBlock()
 	end := p.nodePos()
 
-	// Decorators become Effect.fn pipe combinators (top decorator outermost,
-	// i.e. last argument); non-decorator modifiers (export, ...) stay on the
-	// emitted variable statement.
+	// Decorators are not part of EffectScript: combinators are applied with
+	// the |> pipeline instead. Report and drop them; non-decorator modifiers
+	// (export, ...) stay on the emitted variable statement.
 	keptModifiers := modifiers
-	var combinators []*ast.Node
 	if modifiers != nil {
 		var kept []*ast.Node
-		var decorators []*ast.Node
 		for _, m := range modifiers.Nodes {
 			if ast.IsDecorator(m) {
-				decorators = append(decorators, m)
+				p.parseErrorAtRange(m.Loc, diagnostics.Decorators_are_not_valid_here)
 			} else {
 				kept = append(kept, m)
 			}
 		}
-		for i := len(decorators) - 1; i >= 0; i-- {
-			combinators = append(combinators, p.effectCombinatorFromDecorator(decorators[i]))
-		}
-		if len(decorators) > 0 {
+		if len(kept) < len(modifiers.Nodes) {
 			if len(kept) == 0 {
 				keptModifiers = nil
 			} else {
@@ -371,42 +366,10 @@ func (p *Parser) parseEffectDeclaration(pos int, modifiers *ast.ModifierList) *a
 
 	funcExpr := p.makeGeneratorExpression(parameters, body, pos, end)
 	fn := p.makeEffectCall("fn", []*ast.Node{p.makeStringLiteral(nameText, pos)}, pos, end)
-	// Effect.fn("name")(generator, ...combinators) — pipe combinators follow
-	// the generator in the second call (top decorator last = outermost).
-	outerArgs := append([]*ast.Node{funcExpr}, combinators...)
-	outer := p.finishNodeWithEnd(p.factory.NewCallExpression(fn, nil, nil, p.newNodeList(core.NewTextRange(pos, end), outerArgs), ast.NodeFlagsNone), pos, end)
+	outer := p.finishNodeWithEnd(p.factory.NewCallExpression(fn, nil, nil, p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{funcExpr}), ast.NodeFlagsNone), pos, end)
 	decl := p.finishNodeWithEnd(p.factory.NewVariableDeclaration(name, nil, nil, outer), pos, end)
 	declList := p.finishNodeWithEnd(p.factory.NewVariableDeclarationList(p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{decl}), ast.NodeFlagsConst), pos, end)
 	return p.finishNodeWithEnd(p.factory.NewVariableStatement(keptModifiers, declList), pos, end)
-}
-
-// effectCombinatorFromDecorator maps a decorator on an effect declaration to a
-// pipe combinator: well-known bare names resolve to Effect.*; anything else is
-// used as-is.
-var effectWellKnownCombinators = map[string]bool{
-	"retry": true, "timeout": true, "withSpan": true, "uninterruptible": true,
-	"interruptible": true, "annotateLogs": true, "tapError": true, "provide": true,
-	"ensuring": true,
-}
-
-func (p *Parser) effectCombinatorFromDecorator(decorator *ast.Node) *ast.Expression {
-	expr := decorator.Expression()
-	root := expr
-	for root.Kind == ast.KindCallExpression {
-		root = root.AsCallExpression().Expression
-	}
-	if root.Kind == ast.KindIdentifier && effectWellKnownCombinators[root.Text()] {
-		p.useEffectHelper("Effect")
-		effectIdent := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier("Effect")))
-		methodIdent := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier(root.Text())))
-		access := p.finishSynthesized(p.factory.NewPropertyAccessExpression(effectIdent, nil, methodIdent, ast.NodeFlagsNone))
-		if expr.Kind == ast.KindCallExpression {
-			call := expr.AsCallExpression()
-			return p.finishSynthesized(p.factory.NewCallExpression(access, nil, nil, call.Arguments, ast.NodeFlagsNone))
-		}
-		return access
-	}
-	return expr
 }
 
 // effect name(params) { body } (expression position)

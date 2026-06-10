@@ -71,8 +71,8 @@ with the expected output. Working today, in `.ets`/`.etsx` files:
 (`x <- e`, destructuring, typed, `(<- e)`) · `raise`/`raise.die` ·
 postfix `catch { Tag as e >> … }` arms · `match (x)` / `match tag (x)` with
 guards and or-patterns · `service`/`layer`/`scoped layer`/`provide` · `par`/
-`race`/`fork`/`join` · `using … release`/`defer` · the `|>` pipeline · decorator
-combinators · `A raises E requires R` type sugar · auto-imports · dedicated
+`race`/`fork`/`join` · `using … release`/`defer` · the `|>` pipeline ·
+`A raises E requires R` type sugar · auto-imports · dedicated
 diagnostics (18100/18101/18150/18151) · golden-corpus acceptance tests
 (`testdata/tests/cases/effectscript/`).
 

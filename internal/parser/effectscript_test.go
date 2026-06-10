@@ -396,3 +396,29 @@ const sized = match (n) {
 `)
 	assert.Equal(t, len(file.Diagnostics()), 0, "guarded binding arm is not a catch-all")
 }
+
+func TestEffectScriptDecoratorsRejected(t *testing.T) {
+	t.Parallel()
+	file := parseETS(t, `
+@withSpan("f")
+@retry(schedule)
+export effect f() {
+  return 1
+}
+`)
+	var diagCodes []int32
+	for _, d := range file.Diagnostics() {
+		diagCodes = append(diagCodes, d.Code())
+	}
+	assert.DeepEqual(t, diagCodes, []int32{1206, 1206})
+
+	// Still lowers to `export const f = Effect.fn("f")(generator)` with the
+	// decorators dropped and no combinator arguments appended.
+	stmts := file.Statements.Nodes
+	decl := stmts[len(stmts)-1]
+	assert.Equal(t, decl.Kind, ast.KindVariableStatement)
+	assert.Assert(t, ast.HasSyntacticModifier(decl, ast.ModifierFlagsExport), "export must survive")
+	outer := decl.AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes[0].AsVariableDeclaration().Initializer
+	assert.Equal(t, outer.Kind, ast.KindCallExpression)
+	assert.Equal(t, len(outer.AsCallExpression().Arguments.Nodes), 1, "generator only, no combinators")
+}

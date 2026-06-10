@@ -15,7 +15,7 @@ How every major area of the `effect` library is expressed in EffectScript.
 | Catch by tag | `Effect.catchTag` | `e catch { NotFound [as x] >> … }` | ✅ syntax |
 | Catch multiple tags | `Effect.catchTags` | `e catch { A \| B as x >> … }` | ✅ syntax |
 | Catch all | `Effect.catchAll` | `e catch { _ as x >> … }` | ✅ syntax |
-| Finalization | `Effect.ensuring` / `addFinalizer` | `defer { }` / `@ensuring(...)` | ✅ syntax |
+| Finalization | `Effect.ensuring` / `addFinalizer` | `defer { }` | ✅ syntax |
 | Effect type | `Effect.Effect<A, E, R>` | `A raises E requires R` type sugar | ✅ syntax |
 | Services (Tag) | `Context.Tag` | `service Name { }` | ✅ syntax |
 | Service access | `yield* Tag` | `const svc <- Tag` | ✅ syntax |
@@ -32,10 +32,10 @@ How every major area of the `effect` library is expressed in EffectScript.
 | Resource acquire/release | `Effect.acquireRelease` | `using x <- acq release (c) { }` | ✅ syntax |
 | Scoped binds | `Scope` | `using x <- scopedEffect` | ✅ syntax |
 | Finalizers | `Effect.addFinalizer` | `defer { }` / `defer (exit) { }` | ✅ syntax |
-| Retry | `Effect.retry` | `@retry(schedule)` decorator | ✅ syntax |
-| Timeout | `Effect.timeout` | `@timeout(dur)` decorator | ✅ syntax |
-| Tracing spans | `Effect.withSpan` | `effect name` auto-span; `@withSpan` | ✅ syntax |
-| Interruption control | `Effect.uninterruptible` | `@uninterruptible` decorator | ✅ syntax |
+| Retry | `Effect.retry` | `e \|> Effect.retry(schedule)` | ✅ idiom |
+| Timeout | `Effect.timeout` | `e \|> Effect.timeout(dur)` | ✅ idiom |
+| Tracing spans | `Effect.withSpan` | `effect name` auto-span; `e \|> Effect.withSpan(n)` | ✅ idiom |
+| Interruption control | `Effect.uninterruptible` | `e \|> Effect.uninterruptible` | ✅ idiom |
 | Repeat / schedules | `Effect.repeat`, `Schedule.*` | `e \|> Effect.repeat(sched)` | ✅ idiom |
 | Logging | `Effect.log*` | `<- Effect.logInfo(msg)` | ✅ idiom |
 | Config | `Config.*` | `const port <- Config.number("PORT")` | ✅ idiom |

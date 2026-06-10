@@ -1,4 +1,4 @@
-import { Data, Schedule } from "effect";
+import { Data } from "effect";
 
 class NotFound extends Data.TaggedError("NotFound")<{ id: string }> {}
 class RateLimited extends Data.TaggedError("RateLimited")<{}> {}
@@ -16,7 +16,6 @@ effect findUser(id: string): string raises NotFound {
   return `user-${id}`
 }
 
-@withSpan("fetchGreeting")
 effect fetchGreeting(name: string): string requires Greeter {
   greeter <- Greeter
   prefix  <- greeter.greeting

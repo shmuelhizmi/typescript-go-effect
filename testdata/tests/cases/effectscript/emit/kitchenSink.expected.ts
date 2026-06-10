@@ -1,5 +1,5 @@
 import { Effect, Layer, Context, Fiber, Match } from "effect";
-import { Data, Schedule } from "effect";
+import { Data } from "effect";
 class NotFound extends Data.TaggedError("NotFound")<{
     id: string;
 }> {
@@ -22,7 +22,7 @@ const fetchGreeting = Effect.fn("fetchGreeting")(function* (name: string) {
     const greeter = yield* Greeter;
     const prefix = yield* greeter.greeting;
     return `${prefix}, ${name}!`;
-}, Effect.withSpan("fetchGreeting"));
+});
 const main = Effect.fn("main")(function* () {
     const user = yield* findUser("42").pipe(Effect.catchTag("NotFound", (e) => Effect.gen(function* () { return `fallback-${e.id}`; })), Effect.catchAll((_) => Effect.gen(function* () { return "anonymous"; })));
     const missing = yield* findUser("").pipe(Effect.catchTag("NotFound", (e) => Effect.gen(function* () { return "missing!"; })));

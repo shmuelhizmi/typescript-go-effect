@@ -1,6 +1,5 @@
-// |> pipeline + decorator combinators (SPEC §3.5, §10; TRANSPILATION §1.2, §9)
+// |> pipeline (SPEC §10; TRANSPILATION §9)
 import { Effect } from "effect";
-import { Schedule } from "effect";
 declare const program: any;
 declare const MainLive: any;
 declare const double: (n: number) => number;
@@ -12,4 +11,4 @@ Effect.runPromise(Effect.provide(MainLive)(program));
 const fetchThing = Effect.fn("fetchThing")(function* (id: string) {
     const thing = yield* program;
     return thing;
-}, Effect.timeout("5 seconds"), Effect.retry(Schedule.exponential("100 millis")));
+});

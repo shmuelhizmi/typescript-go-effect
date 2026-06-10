@@ -11,7 +11,7 @@ against the current tree.
 | Phase 0 — spec + golden corpus | ✅ `docs/effectscript/`, `testdata/tests/cases/effectscript/` |
 | Phase 1 — file plumbing (.ets/.etsx, ScriptKinds, `effect`/`effectImportSource` options) | ✅ |
 | Phase 2 v0 — `effect` declarations, `effect {}` blocks, binds (`x <- e`, `<- e`, `(<- e)`), `raise`/`raise.die`, auto-import | ✅ parse-time lowering (`internal/parser/effectscript.go`) |
-| Phase 2 — service/layer/catch/match/par/race/fork/join/using/defer/`|>`/`raises` sugar, export modifiers, decorator combinators | ✅ |
+| Phase 2 — service/layer/catch/match/par/race/fork/join/using/defer/`|>`/`raises` sugar, export modifiers | ✅ |
 | Phase 2 acceptance — golden corpus harness (`internal/parser/effectscript_corpus_test.go`, `UPDATE_EFFECT_BASELINES=1` to regen) | ✅ |
 | Module resolution — `./x.js` specifiers resolve to `.ets`/`.etsx`; declaration emit (`.d.ts` with inferred `Effect.Effect<A, E, R>`) | ✅ |
 | Diagnostics — 18100/18101/18150/18151 emitted from the parser | ✅ |
@@ -113,7 +113,7 @@ with the real npm package executing transpiled output under Node).
 
 ### Phase 4 — Checking
 Run checker over desugared trees with original-position re-homing (18103, 18110,
-18112, 18130, 18140); checker-resolved `_tag` strings for `catchTag`; `satisfies`
+18112, 18130); checker-resolved `_tag` strings for `catchTag`; `satisfies`
 augmentation for `raises`/`requires` annotations (TRANSPILATION §11); declaration
 emit for `.ets`.
 

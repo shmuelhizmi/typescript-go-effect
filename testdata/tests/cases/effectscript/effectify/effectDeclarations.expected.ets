@@ -1,5 +1,6 @@
 // Effect.fn / Effect.gen in declaration, expression, class-field and
-// export-default positions, with decorator combinators
+// export-default positions; calls with extra pipe-combinator arguments
+// stay untouched (EffectScript has no syntax for them)
 import { Effect, Schedule } from "effect";
 
 declare const policy: Schedule.Schedule<unknown>;
@@ -12,11 +13,9 @@ effect withParams(n: number, label: string) {
   return `${label}: ${n}`;
 }
 
-@Effect.uninterruptible
-@Effect.retry(policy)
-effect decorated() {
+const decorated = Effect.fn("decorated")(function* () {
   return 2;
-}
+}, Effect.retry(policy), Effect.uninterruptible);
 
 const anon = effect (n: number) {
   return n * 2;

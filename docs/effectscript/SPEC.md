@@ -161,26 +161,16 @@ class UserRepo {
 
 Desugars to a method whose body is `return Effect.fn("UserRepo.getById")(function* ...)(...)` —
 normatively: the method becomes a field initialized with the `Effect.fn` value (so
-`this` capture follows class-field semantics; see TRANSPILATION §1.4).
+`this` capture follows class-field semantics; see TRANSPILATION §1.3).
 
-### 3.5 Decorator combinators on `effect` declarations
+### 3.5 No decorators on `effect` declarations
 
-Standard decorator syntax applied to an `effect` declaration composes pipe-style
-combinators in source order (top decorator outermost):
+Decorator syntax is not supported on `effect` declarations (error 1206); apply
+combinators with the `|>` pipeline (§10) instead:
 
 ```ts
-@retry(Schedule.exponential("100 millis"))
-@timeout("5 seconds")
-effect fetchUser(id: string): User raises FetchError { ... }
+const fetchUser = baseFetchUser |> Effect.retry(schedule) |> Effect.timeout("5 seconds");
 ```
-
-→ `Effect.fn("fetchUser", Effect.retry(Schedule...), Effect.timeout("5 seconds"))(function* ...)`.
-
-The decorator expression must evaluate to `(e: Effect<...>) => Effect<...>`; the
-well-known names `retry`, `timeout`, `withSpan`, `uninterruptible`, `interruptible`,
-`annotateLogs`, `tapError`, `provide` resolve to the corresponding `Effect.*`
-combinator when not otherwise in scope. Any in-scope user function of the right shape
-is also allowed.
 
 ---
 
@@ -262,8 +252,8 @@ page <- effect {
 
 * Plain JS `try/catch` inside an effect body keeps its standard meaning — it does
   **not** intercept Effect failures; a warning (18111) points to `catch` arms.
-* Finalization is orthogonal: use `defer { ... }` (§8) or the `@ensuring(...)`
-  decorator; there is no `finally` arm.
+* Finalization is orthogonal: use `defer { ... }` (§8); there is no `finally`
+  arm.
 
 ## 7. Services and layers
 
@@ -455,7 +445,6 @@ because a JSX element's `<` must be followed by an identifier, `>`, or `/`.
 | 18113 | `'catch' arms can only be attached to an Effect-typed expression.` |
 | 18120 | `'par'/'race'/'fork'/'join' are only allowed inside an effect body.` |
 | 18130 | `'using ... <-' requires a Scope in context; add 'scoped' or provide one.` |
-| 18140 | `Decorator on an 'effect' declaration must be an Effect combinator.` |
 | 18150 | `Pattern identifiers must be lowercase bindings or capitalized tag references.` |
 | 18151 | `Unreachable match arm (follows a catch-all arm).` |
 | 18152 | `'match' is not exhaustive; add the missing arms or a '_' arm.` (surfaced via Match.exhaustive) |

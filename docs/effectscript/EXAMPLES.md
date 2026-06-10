@@ -210,37 +210,7 @@ const dashboard = Effect.fn("dashboard")(function* (userId: string) {
 });
 ```
 
-## 6. Decorator combinators
-
-```ts
-@retry(Schedule.exponential("100 millis", 2).pipe(Schedule.upTo("5 seconds")))
-@timeout("10 seconds")
-effect fetchQuote(symbol: string): Quote raises QuoteError requires Http {
-  http <- Http
-  res  <- http.get(`/quote/${symbol}`) catch {
-    RateLimited >> Quote.cached(symbol)
-  }
-  return parseQuote((<- res.json))
-}
-```
-
-⇣
-
-```ts
-const fetchQuote = Effect.fn("fetchQuote")(
-  function* (symbol: string) {
-    const http = yield* Http;
-    const res = yield* http.get(`/quote/${symbol}`).pipe(
-      Effect.catchTag("RateLimited", () => Effect.succeed(Quote.cached(symbol))),
-    );
-    return parseQuote((yield* res.json));
-  },
-  Effect.timeout("10 seconds"),
-  Effect.retry(Schedule.exponential("100 millis", 2).pipe(Schedule.upTo("5 seconds"))),
-);
-```
-
-## 7. React interop (`.etsx`)
+## 6. React interop (`.etsx`)
 
 EffectScript relates to Effect exactly as JSX relates to React — and the two
 compose in one file:
@@ -270,7 +240,7 @@ export function BuyButton({ item }: { item: ItemId }) {
 The JSX desugars through the standard JSX transform; the `effect` constructs
 through the EffectScript transform. Two orthogonal sugars, one file.
 
-## 8. Expression-level binds
+## 7. Expression-level binds
 
 ```ts
 effect total(cart: Cart): number requires Pricing {

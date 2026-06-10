@@ -18,4 +18,4 @@ Hello, user-42! | Hello, missing!! | Hello, forked! | seven | nf:x | 42
 
 which demonstrates: defer finalizers via Effect.scoped, service/layer wiring,
 catch-arm recovery (taken and not taken), par, fork/join, value- and tag-mode
-match, the |> pipeline, and @withSpan decorator lowering.
+match, and the |> pipeline.

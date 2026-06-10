@@ -81,8 +81,11 @@ func (r *rewriter) effectFnText(shape effectFnShape) string {
 
 // tryEffectDeclaration matches pattern #1/#2:
 //
-//	[export] const f = Effect.fn("f")(function* (p) { b }, …combinators);
-//	→ [@combinator]* [export] effect f(p) { b' }
+//	[export] const f = Effect.fn("f")(function* (p) { b });
+//	→ [export] effect f(p) { b' }
+//
+// Calls with extra pipe-combinator arguments are left untouched: EffectScript
+// has no syntax for them on an effect declaration.
 func (r *rewriter) tryEffectDeclaration(node *ast.Node) (string, bool) {
 	vs := node.AsVariableStatement()
 	declList := vs.DeclarationList.AsVariableDeclarationList()
@@ -96,7 +99,7 @@ func (r *rewriter) tryEffectDeclaration(node *ast.Node) (string, bool) {
 		return "", false
 	}
 	shape, ok := r.matchEffectFn(vd.Initializer)
-	if !ok || shape.name == "" || shape.name != name.Text() {
+	if !ok || shape.name == "" || shape.name != name.Text() || len(shape.combinators) > 0 {
 		return "", false
 	}
 	if vs.Modifiers() != nil {
@@ -108,36 +111,10 @@ func (r *rewriter) tryEffectDeclaration(node *ast.Node) (string, bool) {
 	}
 
 	var b strings.Builder
-	// Combinators reverse into decorators: last argument = top decorator.
-	for i := len(shape.combinators) - 1; i >= 0; i-- {
-		c := shape.combinators[i]
-		if !isDecoratorExpression(c) {
-			return "", false
-		}
-		b.WriteString("@")
-		b.WriteString(r.emit(c))
-		b.WriteString("\n")
-	}
 	b.WriteString(r.modifiersText(vs.Modifiers()))
 	b.WriteString(r.effectFnText(shape))
 	r.stats.count("effect-declaration")
 	return b.String(), true
-}
-
-// isDecoratorExpression reports whether an expression is valid after `@`
-// (identifier / property-access / call chains).
-func isDecoratorExpression(node *ast.Node) bool {
-	switch node.Kind {
-	case ast.KindIdentifier:
-		return true
-	case ast.KindPropertyAccessExpression:
-		pa := node.AsPropertyAccessExpression()
-		return pa.QuestionDotToken == nil && isDecoratorExpression(pa.Expression)
-	case ast.KindCallExpression:
-		call := node.AsCallExpression()
-		return call.QuestionDotToken == nil && isDecoratorExpression(call.Expression)
-	}
-	return false
 }
 
 // tryEffectFnExpression matches patterns #3 and the expression form of #1:

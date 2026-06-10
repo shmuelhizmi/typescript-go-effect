@@ -1,7 +1,7 @@
 // misc diagnostics: plain try warning, scope check, decorator check, effect-block jumps
 
 declare const ea: any;
-declare const notACombinator: number;
+declare const someDecorator: any;
 
 effect tryWarning() {
   try {                  // warning TS18111: 'try' does not catch Effect failures
@@ -17,7 +17,7 @@ effect scopeNeeded() {
   return conn
 }
 
-@notACombinator          // error TS18140: decorator must be an Effect combinator
+@someDecorator           // error TS1206: decorators are not valid on effect declarations
 effect decorated() {
   return 1
 }
