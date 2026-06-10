@@ -28,9 +28,23 @@
         "onLanguage:javascript",
         "onLanguage:javascriptreact",
         "onLanguage:typescript",
-        "onLanguage:typescriptreact"
+        "onLanguage:typescriptreact",
+        "onLanguage:effectscript",
+        "onLanguage:effectscriptreact"
     ],
     "contributes": {
+        "languages": [
+            {
+                "id": "effectscript",
+                "aliases": ["EffectScript"],
+                "extensions": [".ets"]
+            },
+            {
+                "id": "effectscriptreact",
+                "aliases": ["EffectScript React"],
+                "extensions": [".etsx"]
+            }
+        ],
         "configuration": [
             {
                 "title": "TypeScript Native Preview",

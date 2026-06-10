@@ -8,6 +8,8 @@ export const jsTsLanguageModes = [
     "typescriptreact",
     "javascript",
     "javascriptreact",
+    "effectscript",
+    "effectscriptreact",
 ];
 
 export const builtinTSExtensionId = "vscode.typescript-language-features";
