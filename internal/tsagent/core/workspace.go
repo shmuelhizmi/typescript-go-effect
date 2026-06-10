@@ -112,30 +112,40 @@ func NewWorkspace(opts Options) (*Workspace, error) {
 
 func resolveConfigPath(fs vfs.FS, cwd string, project string) (string, error) {
 	if project == "" {
-		for dir := cwd; ; {
-			candidate := tspath.CombinePaths(dir, "tsconfig.json")
-			if fs.FileExists(candidate) {
-				return candidate, nil
-			}
-			parent := tspath.GetDirectoryPath(dir)
-			if parent == dir {
-				return "", fmt.Errorf("no tsconfig.json found walking up from %s (use --project)", cwd)
-			}
-			dir = parent
+		if config, ok := findConfigUpwards(fs, cwd); ok {
+			return config, nil
 		}
+		return "", fmt.Errorf("no tsconfig.json found walking up from %s (use --project)", cwd)
 	}
 	abs := tspath.GetNormalizedAbsolutePath(project, cwd)
 	if fs.DirectoryExists(abs) {
-		candidate := tspath.CombinePaths(abs, "tsconfig.json")
-		if fs.FileExists(candidate) {
-			return candidate, nil
+		// A directory without its own tsconfig.json is covered by the nearest
+		// ancestor config (same discovery as the cwd default).
+		if config, ok := findConfigUpwards(fs, abs); ok {
+			return config, nil
 		}
-		return "", fmt.Errorf("no tsconfig.json in directory %s", abs)
+		return "", fmt.Errorf("no tsconfig.json in %s or any parent directory (walked up to the filesystem root)", abs)
 	}
 	if fs.FileExists(abs) {
 		return abs, nil
 	}
 	return "", fmt.Errorf("project %s does not exist", abs)
+}
+
+// findConfigUpwards walks from start to the filesystem root looking for a
+// tsconfig.json.
+func findConfigUpwards(fs vfs.FS, start string) (string, bool) {
+	for dir := start; ; {
+		candidate := tspath.CombinePaths(dir, "tsconfig.json")
+		if fs.FileExists(candidate) {
+			return candidate, true
+		}
+		parent := tspath.GetDirectoryPath(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
 }
 
 func diagnosticMessages(diags []*ast.Diagnostic) string {

@@ -41,7 +41,7 @@ func TestSymbolMoveAnchoredInsertPos(t *testing.T) {
 	anchor := strings.Index(destFile.Text(), "export const TAU")
 	var es core.EditSet
 	notes, err := planSymbolMove(context.Background(), ws, declNode, symbol,
-		symbolMoveDest{fileAbs: "/project/src/math.ts", file: destFile, insertPos: anchor}, &es)
+		symbolMoveDest{fileAbs: "/project/src/math.ts", file: destFile, insertPos: anchor}, false, &es)
 	if err != nil {
 		t.Fatalf("planSymbolMove: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestSymbolMoveAnchoredKeepsDepImportsAtTop(t *testing.T) {
 	anchor := strings.Index(destFile.Text(), "export const last")
 	var es core.EditSet
 	if _, err := planSymbolMove(context.Background(), ws, declNode, symbol,
-		symbolMoveDest{fileAbs: "/project/src/dest.ts", file: destFile, insertPos: anchor}, &es); err != nil {
+		symbolMoveDest{fileAbs: "/project/src/dest.ts", file: destFile, insertPos: anchor}, false, &es); err != nil {
 		t.Fatalf("planSymbolMove: %v", err)
 	}
 	result, err := core.Execute(context.Background(), ws, es, core.TxOpts{Apply: true, SingleThreaded: true})
@@ -111,10 +111,10 @@ func TestSymbolMoveBatchesIntoOneEditSet(t *testing.T) {
 	destFile := ws.Program.GetSourceFile("/project/src/math.ts")
 	dest := symbolMoveDest{fileAbs: "/project/src/math.ts", file: destFile, insertPos: -1}
 	var es core.EditSet
-	if _, err := planSymbolMove(context.Background(), ws, decl1, sym1, dest, &es); err != nil {
+	if _, err := planSymbolMove(context.Background(), ws, decl1, sym1, dest, false, &es); err != nil {
 		t.Fatalf("planSymbolMove f1: %v", err)
 	}
-	if _, err := planSymbolMove(context.Background(), ws, decl2, sym2, dest, &es); err != nil {
+	if _, err := planSymbolMove(context.Background(), ws, decl2, sym2, dest, false, &es); err != nil {
 		t.Fatalf("planSymbolMove f2: %v", err)
 	}
 	result, err := core.Execute(context.Background(), ws, es, core.TxOpts{Apply: true, SingleThreaded: true})
@@ -145,7 +145,7 @@ func TestSymbolMoveImporterRewriteRespectsUseClientDirective(t *testing.T) {
 	destFile := ws.Program.GetSourceFile("/project/src/math.ts")
 	var es core.EditSet
 	if _, err := planSymbolMove(context.Background(), ws, declNode, symbol,
-		symbolMoveDest{fileAbs: "/project/src/math.ts", file: destFile, insertPos: -1}, &es); err != nil {
+		symbolMoveDest{fileAbs: "/project/src/math.ts", file: destFile, insertPos: -1}, false, &es); err != nil {
 		t.Fatalf("planSymbolMove: %v", err)
 	}
 	result, err := core.Execute(context.Background(), ws, es, core.TxOpts{Apply: true, SingleThreaded: true})
@@ -178,7 +178,7 @@ func TestSymbolMoveDestDepImportsRespectDirectiveAndShebang(t *testing.T) {
 	destFile := ws.Program.GetSourceFile("/project/src/dest.ts")
 	var es core.EditSet
 	if _, err := planSymbolMove(context.Background(), ws, declNode, symbol,
-		symbolMoveDest{fileAbs: "/project/src/dest.ts", file: destFile, insertPos: -1}, &es); err != nil {
+		symbolMoveDest{fileAbs: "/project/src/dest.ts", file: destFile, insertPos: -1}, false, &es); err != nil {
 		t.Fatalf("planSymbolMove: %v", err)
 	}
 	result, err := core.Execute(context.Background(), ws, es, core.TxOpts{Apply: true, SingleThreaded: true})
@@ -218,7 +218,7 @@ func TestSymbolMoveKeepsNonEmptySource(t *testing.T) {
 	destFile := ws.Program.GetSourceFile("/project/src/math.ts")
 	var es core.EditSet
 	notes, err := planSymbolMove(context.Background(), ws, declNode, symbol,
-		symbolMoveDest{fileAbs: "/project/src/math.ts", file: destFile, insertPos: -1}, &es)
+		symbolMoveDest{fileAbs: "/project/src/math.ts", file: destFile, insertPos: -1}, false, &es)
 	if err != nil {
 		t.Fatalf("planSymbolMove: %v", err)
 	}
@@ -252,10 +252,10 @@ func TestSymbolMoveRefusesPendingCreateDestination(t *testing.T) {
 	decl2, sym2 := resolveMoveTarget(t, ws, "f2")
 	dest := symbolMoveDest{fileAbs: "/project/src/new.ts", create: true, insertPos: -1}
 	var es core.EditSet
-	if _, err := planSymbolMove(context.Background(), ws, decl1, sym1, dest, &es); err != nil {
+	if _, err := planSymbolMove(context.Background(), ws, decl1, sym1, dest, false, &es); err != nil {
 		t.Fatalf("planSymbolMove f1: %v", err)
 	}
-	_, err := planSymbolMove(context.Background(), ws, decl2, sym2, dest, &es)
+	_, err := planSymbolMove(context.Background(), ws, decl2, sym2, dest, false, &es)
 	if err == nil || cli.ExitCode(err) != cli.ExitRefused {
 		t.Fatalf("expected a refusal, got %v", err)
 	}

@@ -572,6 +572,84 @@ func TestEditDeleteBetweenDeclsLeavesSingleBlankLine(t *testing.T) {
 	}
 }
 
+func TestEditInsertEndSeparatedByBlankLine(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export function f(): number {\n\treturn 1;\n}\n",
+	})
+	script := "insert end src/a.ts <<EOF\n// new\nEOF\n"
+	mustRunEditScript(t, ws, script)
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	want := "export function f(): number {\n\treturn 1;\n}\n\n// new\n"
+	if text != want {
+		t.Errorf("a.ts = %q, want %q", text, want)
+	}
+}
+
+func TestEditInsertEndFileWithoutTrailingNewline(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export const a = 1;",
+	})
+	script := "insert end src/a.ts <<EOF\n// new\nEOF\n"
+	mustRunEditScript(t, ws, script)
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	want := "export const a = 1;\n\n// new\n"
+	if text != want {
+		t.Errorf("a.ts = %q, want %q", text, want)
+	}
+}
+
+func TestEditInsertTopSeparatedByBlankLine(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export const a = 1;\n",
+	})
+	script := "insert top src/a.ts <<EOF\n// top\nEOF\n"
+	mustRunEditScript(t, ws, script)
+	text := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	want := "// top\n\nexport const a = 1;\n"
+	if text != want {
+		t.Errorf("a.ts = %q, want %q", text, want)
+	}
+}
+
+func TestEditMoveWithDepsExecutes(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/util.ts": "function helper(): number {\n\treturn 7;\n}\nexport function moveMe(): number {\n\treturn helper();\n}\nexport const keep = 1;\n",
+		"/project/src/dest.ts": "export const unrelated = 0;\n",
+	})
+	result := mustRunEditScript(t, ws, "move src/util.ts#moveMe end src/dest.ts with-deps\n")
+	if !result.Tx.Applied || len(result.Tx.NewErrors) != 0 {
+		t.Fatalf("tx = %+v, want clean apply", result.Tx)
+	}
+	dest := readWorkspaceFile(t, ws, "/project/src/dest.ts")
+	indexOrder(t, dest, "export const unrelated = 0;", "function helper", "export function moveMe")
+	if strings.Contains(dest, "export function helper") {
+		t.Errorf("the moved dependency must stay unexported: %q", dest)
+	}
+	util := readWorkspaceFile(t, ws, "/project/src/util.ts")
+	if strings.Contains(util, "helper") {
+		t.Errorf("the dependency should be gone from the source: %q", util)
+	}
+}
+
+func TestEditMoveWithoutWithDepsSuggestsModifier(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/util.ts": "function helper(): number {\n\treturn 7;\n}\nexport function moveMe(): number {\n\treturn helper();\n}\n",
+		"/project/src/dest.ts": "export const unrelated = 0;\n",
+	})
+	_, err := runEditScript(t, ws, "move src/util.ts#moveMe end src/dest.ts\n", nil)
+	if err == nil || cli.ExitCode(err) != cli.ExitRefused {
+		t.Fatalf("expected a refusal, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "with-deps") {
+		t.Errorf("refusal should suggest the with-deps modifier: %v", err)
+	}
+}
+
 func TestEditInsertTopRespectsUseClientDirective(t *testing.T) {
 	t.Parallel()
 	ws := newTestWorkspace(t, map[string]any{

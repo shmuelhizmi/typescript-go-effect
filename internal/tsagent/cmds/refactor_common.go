@@ -125,7 +125,12 @@ func refactorRemoveImportSpecifierEdit(file *ast.SourceFile, importDecl *ast.Nod
 	if len(specs) == 1 && clause.Name() == nil {
 		return icore.TextChange{TextRange: refactorDeletionRange(file, importDecl), NewText: ""}
 	}
-	text := file.Text()
+	return refactorRemoveListSpecifierEdit(file.Text(), spec)
+}
+
+// refactorRemoveListSpecifierEdit removes one specifier from a braced
+// import/export clause along with its separating comma.
+func refactorRemoveListSpecifierEdit(text string, spec *ast.Node) icore.TextChange {
 	pos := scanner.SkipTrivia(text, spec.Pos())
 	end := spec.End()
 	j := end

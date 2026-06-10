@@ -9,8 +9,8 @@ import (
 // edit_parse.go is the parser for the `tsagent edit` script DSL (plan Part
 // B). The language is line-oriented:
 //
-//	move    <sym> before|after <sym>      # reorder, or cross-file with anchor
-//	move    <sym> top|end <path>          # cross-file file-level position
+//	move    <sym> before|after <sym> [with-deps]  # reorder, or cross-file with anchor
+//	move    <sym> top|end <path>     [with-deps]  # cross-file file-level position
 //	insert  before|after <sym> <<TAG … TAG
 //	insert  top|end <path>     <<TAG … TAG
 //	insert  into <class-like-sym> <<TAG … TAG
@@ -34,12 +34,13 @@ type editPlace struct {
 
 // editOp is one parsed op of an edit script.
 type editOp struct {
-	Line  int    // 1-based line of the op in the script
-	Verb  string // move|insert|replace|delete
-	Sym   string // operand symbol ID (move/replace/delete; empty for insert)
-	Place editPlace
-	Body  string // heredoc body, verbatim (no trailing newline added)
-	Raw   string // normalized one-line description for reports
+	Line     int    // 1-based line of the op in the script
+	Verb     string // move|insert|replace|delete
+	Sym      string // operand symbol ID (move/replace/delete; empty for insert)
+	Place    editPlace
+	Body     string // heredoc body, verbatim (no trailing newline added)
+	Raw      string // normalized one-line description for reports
+	WithDeps bool   // move only: carry file-local unexported deps along
 }
 
 // parseEditScript parses an edit script. All errors are collected (each
@@ -156,8 +157,12 @@ func parseEditOpLine(lineNo int, tokens []string, body string, hasBody bool) (ed
 		if hasBody {
 			return op, fmt.Errorf("line %d: move does not take a heredoc body", lineNo)
 		}
+		if len(tokens) == 5 && tokens[4] == "with-deps" {
+			op.WithDeps = true
+			tokens = tokens[:4]
+		}
 		if len(tokens) != 4 {
-			return op, fmt.Errorf("line %d: move takes <sym> before|after <sym> or <sym> top|end <path>", lineNo)
+			return op, fmt.Errorf("line %d: move takes <sym> before|after <sym> or <sym> top|end <path>, optionally followed by with-deps", lineNo)
 		}
 		op.Sym = tokens[1]
 		place, err := editParsePlace(lineNo, tokens[2], tokens[3], false /*allowInto*/)
@@ -166,6 +171,9 @@ func parseEditOpLine(lineNo int, tokens []string, body string, hasBody bool) (ed
 		}
 		op.Place = place
 		op.Raw = fmt.Sprintf("move %s %s %s", editQuoteToken(op.Sym), place.Kind, editQuoteToken(editPlaceTarget(place)))
+		if op.WithDeps {
+			op.Raw += " with-deps"
+		}
 	case "insert":
 		if len(tokens) != 3 {
 			return op, fmt.Errorf("line %d: insert takes before|after <sym>, top|end <path>, or into <sym>, followed by <<TAG", lineNo)

@@ -54,6 +54,31 @@ func TestEditParseMoveTopEnd(t *testing.T) {
 	}
 }
 
+func TestEditParseMoveWithDeps(t *testing.T) {
+	t.Parallel()
+	ops := parseEditScriptOK(t, "move src/a.ts#f end src/b.ts with-deps\nmove src/a.ts#f after src/b.ts#g with-deps\nmove src/a.ts#f end src/b.ts\n")
+	if len(ops) != 3 {
+		t.Fatalf("got %d ops, want 3", len(ops))
+	}
+	if !ops[0].WithDeps || !ops[1].WithDeps || ops[2].WithDeps {
+		t.Errorf("WithDeps flags = %v %v %v, want true true false", ops[0].WithDeps, ops[1].WithDeps, ops[2].WithDeps)
+	}
+	if ops[0].Raw != "move src/a.ts#f end src/b.ts with-deps" {
+		t.Errorf("raw = %q", ops[0].Raw)
+	}
+	if ops[1].Place != (editPlace{Kind: "after", Sym: "src/b.ts#g"}) {
+		t.Errorf("place = %+v", ops[1].Place)
+	}
+}
+
+func TestEditParseMoveBadTrailingToken(t *testing.T) {
+	t.Parallel()
+	_, errs := parseEditScript("move src/a.ts#f end src/b.ts withdeps\n")
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "with-deps") {
+		t.Fatalf("errs = %v, want one error mentioning with-deps", errs)
+	}
+}
+
 func TestEditParseInsertVariants(t *testing.T) {
 	t.Parallel()
 	src := strings.Join([]string{

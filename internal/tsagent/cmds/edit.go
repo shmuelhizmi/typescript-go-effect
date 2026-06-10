@@ -403,13 +403,26 @@ func editInsertPos(r editResolvedOp) (*ast.SourceFile, int, error) {
 }
 
 // editSeparateBlock prepares inserted raw code for the target position: it
-// never glues to a non-newline, and a top-level before/after insert is
-// separated from the adjacent declaration by exactly one blank line (inserts
-// into class bodies and file top/end keep the single-newline behavior).
+// never glues to a non-newline, and a top-level insert is separated from the
+// adjacent declaration by exactly one blank line — before/after from their
+// anchor, `end` from the last declaration, `top` from the first declaration
+// (inserts into class bodies keep the single-newline behavior).
 func editSeparateBlock(r editResolvedOp, file *ast.SourceFile, pos int, newText string) string {
 	text := file.Text()
 	if pos > 0 && text[pos-1] != '\n' {
 		newText = "\n" + newText
+	}
+	switch r.op.Place.Kind {
+	case "top":
+		if !editBlankLineAt(text, pos) {
+			newText += "\n"
+		}
+		return newText
+	case "end":
+		if !editBlankLineBefore(text, pos) {
+			newText = "\n" + newText
+		}
+		return newText
 	}
 	if r.anchorNode == nil || r.anchorNode.Parent == nil || r.anchorNode.Parent.Kind != ast.KindSourceFile {
 		return newText
@@ -580,7 +593,7 @@ func (b *editBuilder) crossFileMove(ctx context.Context, r editResolvedOp, dest 
 		return nil
 	}
 	editsBefore, opsBefore := len(b.es.Edits), len(b.es.Ops)
-	notes, err := planSymbolMove(ctx, b.ws, r.declNode, r.symbol, dest, &b.es)
+	notes, err := planSymbolMove(ctx, b.ws, r.declNode, r.symbol, dest, op.WithDeps, &b.es)
 	if err != nil {
 		return cli.Errorf(cli.ExitCode(err), "line %d: %v", op.Line, err)
 	}

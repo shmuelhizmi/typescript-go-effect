@@ -9,13 +9,13 @@ import (
 	"github.com/microsoft/typescript-go/internal/tsagent/core"
 )
 
-// refactor mv-symbol (§4.4), v1 semantics: move ONE top-level declaration
+// refactor mv-symbol (§4.4): move ONE top-level declaration
 // (function/class/interface/type/enum/sole-declarator const) to another
 // project file. A thin wrapper around the planSymbolMove planner
 // (symbolmove.go), shared with the `edit` command: this command resolves the
 // target and destination, plans an append-at-end move, and finishes via the
 // refactor transaction path. Refused (exit 4): declarations that reference
-// file-local unexported symbols (--with-deps is not implemented),
+// file-local unexported symbols (unless --with-deps moves them along),
 // default-exported or overloaded declarations.
 
 func init() {
@@ -30,6 +30,7 @@ func init() {
 			registerRefactorTxFlags(fs, &f.tx)
 			fs.StringVar(&f.to, "to", "", "destination file (project-relative or absolute)")
 			fs.BoolVar(&f.create, "create", false, "create the destination file if it does not exist")
+			fs.BoolVar(&f.withDeps, "with-deps", false, "move file-local unexported declarations the symbol references along with it")
 			return f
 		},
 		Run: func(ctx context.Context, ws *core.Workspace, flags any, args []string) (any, error) {
@@ -39,10 +40,11 @@ func init() {
 }
 
 type refactorMvSymbolFlags struct {
-	target refactorTargetFlags
-	tx     refactorTxFlags
-	to     string
-	create bool
+	target   refactorTargetFlags
+	tx       refactorTxFlags
+	to       string
+	create   bool
+	withDeps bool
 }
 
 func runRefactorMvSymbol(ctx context.Context, ws *core.Workspace, f *refactorMvSymbolFlags, args []string) (*core.TxResult, error) {
@@ -78,7 +80,7 @@ func runRefactorMvSymbol(ctx context.Context, ws *core.Workspace, f *refactorMvS
 
 	var es core.EditSet
 	notes, err := planSymbolMove(ctx, ws, declNode, symbol,
-		symbolMoveDest{fileAbs: destAbs, file: destFile, create: creating, insertPos: -1}, &es)
+		symbolMoveDest{fileAbs: destAbs, file: destFile, create: creating, insertPos: -1}, f.withDeps, &es)
 	if err != nil {
 		return nil, err
 	}
