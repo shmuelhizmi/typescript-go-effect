@@ -90,6 +90,15 @@ positions defined below (like `async`, `satisfies`, `accessor`). Look-ahead rule
 No line terminator is permitted between `effect` and what follows it, between `raise`
 and its operand, or between `fork` / `join` / `par` / `race` and their operands.
 
+Bind operands follow ordinary expression ASI, including the classic hazard: a next
+line starting with `[` (or `(`) continues the previous operand. As in JS, terminate
+the previous statement with `;` when the next one starts with `[`:
+
+```ts
+{ x, y } <- ec;     // ';' needed —
+[first] <- ea       // otherwise this reads as ec[first]
+```
+
 ---
 
 ## 3. Effect declarations and effect blocks

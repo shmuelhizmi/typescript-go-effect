@@ -240,6 +240,12 @@ func (p *Parser) isAtBindArrow() bool {
 
 func (p *Parser) nextIsBindArrow() bool {
 	p.nextToken()
+	if p.token == ast.KindColonToken {
+		// typed bind: x: T <- e   (the lookahead wrapper restores all state)
+		p.nextToken()
+		p.parseType()
+		return p.isAtBindArrow()
+	}
 	return p.isAtBindArrow()
 }
 
@@ -262,6 +268,11 @@ func (p *Parser) parseBindStatement() *ast.Statement {
 	default:
 		name = p.parseIdentifier()
 	}
+	var typeNode *ast.TypeNode
+	if p.token == ast.KindColonToken {
+		p.nextToken()
+		typeNode = p.parseType()
+	}
 	p.consumeBindArrow()
 	operandPos := p.nodePos()
 	operand := p.parseAssignmentExpressionOrHigher()
@@ -269,7 +280,7 @@ func (p *Parser) parseBindStatement() *ast.Statement {
 	end := p.nodePos()
 
 	yieldExpr := p.makeYieldStar(operand, operandPos, end)
-	decl := p.finishNodeWithEnd(p.factory.NewVariableDeclaration(name, nil, nil, yieldExpr), pos, end)
+	decl := p.finishNodeWithEnd(p.factory.NewVariableDeclaration(name, nil, typeNode, yieldExpr), pos, end)
 	declList := p.finishNodeWithEnd(p.factory.NewVariableDeclarationList(p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{decl}), ast.NodeFlagsConst), pos, end)
 	return p.finishNodeWithEnd(p.factory.NewVariableStatement(nil, declList), pos, end)
 }
@@ -321,12 +332,84 @@ func (p *Parser) parseEffectDeclaration(pos int, modifiers *ast.ModifierList) *a
 	body := p.parseEffectFunctionBlock()
 	end := p.nodePos()
 
+	// Decorators become Effect.fn pipe combinators (top decorator outermost,
+	// i.e. last argument); non-decorator modifiers (export, ...) stay on the
+	// emitted variable statement.
+	fnArgs := []*ast.Node{p.makeStringLiteral(nameText, pos)}
+	keptModifiers := modifiers
+	if modifiers != nil {
+		var kept []*ast.Node
+		var decorators []*ast.Node
+		for _, m := range modifiers.Nodes {
+			if ast.IsDecorator(m) {
+				decorators = append(decorators, m)
+			} else {
+				kept = append(kept, m)
+			}
+		}
+		for i := len(decorators) - 1; i >= 0; i-- {
+			fnArgs = append(fnArgs, p.effectCombinatorFromDecorator(decorators[i]))
+		}
+		if len(decorators) > 0 {
+			if len(kept) == 0 {
+				keptModifiers = nil
+			} else {
+				keptModifiers = p.newModifierList(modifiers.Loc, kept)
+			}
+		}
+	}
+
 	funcExpr := p.makeGeneratorExpression(parameters, body, pos, end)
-	fn := p.makeEffectCall("fn", []*ast.Node{p.makeStringLiteral(nameText, pos)}, pos, end)
+	fn := p.makeEffectCall("fn", fnArgs, pos, end)
 	outer := p.finishNodeWithEnd(p.factory.NewCallExpression(fn, nil, nil, p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{funcExpr}), ast.NodeFlagsNone), pos, end)
 	decl := p.finishNodeWithEnd(p.factory.NewVariableDeclaration(name, nil, nil, outer), pos, end)
 	declList := p.finishNodeWithEnd(p.factory.NewVariableDeclarationList(p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{decl}), ast.NodeFlagsConst), pos, end)
-	return p.finishNodeWithEnd(p.factory.NewVariableStatement(modifiers, declList), pos, end)
+	return p.finishNodeWithEnd(p.factory.NewVariableStatement(keptModifiers, declList), pos, end)
+}
+
+// effectCombinatorFromDecorator maps a decorator on an effect declaration to a
+// pipe combinator: well-known bare names resolve to Effect.*; anything else is
+// used as-is.
+var effectWellKnownCombinators = map[string]bool{
+	"retry": true, "timeout": true, "withSpan": true, "uninterruptible": true,
+	"interruptible": true, "annotateLogs": true, "tapError": true, "provide": true,
+	"ensuring": true,
+}
+
+func (p *Parser) effectCombinatorFromDecorator(decorator *ast.Node) *ast.Expression {
+	expr := decorator.Expression()
+	root := expr
+	for root.Kind == ast.KindCallExpression {
+		root = root.AsCallExpression().Expression
+	}
+	if root.Kind == ast.KindIdentifier && effectWellKnownCombinators[root.Text()] {
+		p.useEffectHelper("Effect")
+		effectIdent := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier("Effect")))
+		methodIdent := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier(root.Text())))
+		access := p.finishSynthesized(p.factory.NewPropertyAccessExpression(effectIdent, nil, methodIdent, ast.NodeFlagsNone))
+		if expr.Kind == ast.KindCallExpression {
+			call := expr.AsCallExpression()
+			return p.finishSynthesized(p.factory.NewCallExpression(access, nil, nil, call.Arguments, ast.NodeFlagsNone))
+		}
+		return access
+	}
+	return expr
+}
+
+// effect name(params) { body } (expression position)
+//
+//	==>  Effect.fn("name")(function* (params) { body })
+func (p *Parser) parseNamedEffectFnExpression() *ast.Expression {
+	pos := p.nodePos()
+	p.nextToken() // consume 'effect'
+	nameText := p.parseIdentifier().Text()
+	parameters := p.parseParameters(ParseFlagsYield)
+	p.parseReturnType(ast.KindColonToken, false /*isType*/)
+	body := p.parseEffectFunctionBlock()
+	end := p.nodePos()
+	funcExpr := p.makeGeneratorExpression(parameters, body, pos, end)
+	fn := p.makeEffectCall("fn", []*ast.Node{p.makeStringLiteral(nameText, pos)}, pos, end)
+	return p.finishNodeWithEnd(p.factory.NewCallExpression(fn, nil, nil, p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{funcExpr}), ast.NodeFlagsNone), pos, end)
 }
 
 // effect { body }   ==>   Effect.gen(function* () { body })
@@ -683,6 +766,11 @@ func (p *Parser) tryParseEffectScriptExpression() *ast.Expression {
 		}
 		if p.lookAhead((*Parser).nextIsEffectFunctionExpression) {
 			return p.parseEffectFunctionExpression()
+		}
+		if p.lookAhead((*Parser).nextIsEffectDeclarationStart) {
+			// named effect fn in expression position (e.g. export default
+			// effect entry() {...}): the name becomes the tracing span only.
+			return p.parseNamedEffectFnExpression()
 		}
 	case "raise":
 		if p.inEffectBody && p.lookAhead((*Parser).nextIsRaiseOperandStart) {

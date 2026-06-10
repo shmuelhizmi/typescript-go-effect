@@ -1068,6 +1068,9 @@ func (p *Parser) parseStatement() *ast.Statement {
 	case ast.KindSemicolonToken:
 		return p.parseEmptyStatement()
 	case ast.KindOpenBraceToken:
+		if p.isEffectScript() && p.inEffectBody && p.lookAhead((*Parser).nextIsBindingPatternBind) {
+			return p.parseBindStatement()
+		}
 		return p.parseBlock(false /*ignoreMissingOpenBrace*/, nil)
 	case ast.KindVarKeyword:
 		return p.parseVariableStatement(p.nodePos(), p.jsdocScannerInfo(), nil /*modifiers*/)

@@ -1,7 +1,7 @@
 // fork/join/par/race + using/defer (SPEC §8–9, TRANSPILATION §7–8)
 
 declare const ea: any, eb: any, ec: any;
-declare const Fiber: any;
+declare const Watchdog: any;
 
 effect concurrency() {
   [a, b] <- par [ea, eb]
@@ -11,7 +11,7 @@ effect concurrency() {
   first3 <- race [ea, eb, ec]
 
   fiber <- fork ea
-  defer { <- Fiber.interrupt(fiber) }
+  defer { <- Watchdog.interrupt(fiber) }
   joined <- join fiber
 
   return [a, b, named, bounded, winner, first3, joined]

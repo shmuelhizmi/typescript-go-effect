@@ -4,7 +4,7 @@ declare const ea: any, eb: any, ec: any;
 
 effect binds() {
   a <- ea
-  { x, y } <- ec
+  { x, y } <- ec;
   [first] <- ea
   typed: number <- eb
   <- ec

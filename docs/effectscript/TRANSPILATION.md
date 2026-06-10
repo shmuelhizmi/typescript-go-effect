@@ -260,10 +260,10 @@ import { Effect } from "effect";          // and/or Layer, Context, Fiber, Match
 with `"effect"` replaced by `effectImportSource`. Synthesized specifiers merge into
 one import declaration. A user import of e.g. `Effect` from anywhere suppresses
 synthesis for that name (their binding wins — same as classic JSX factory lookup).
-If a user binding that is *not* an import shadows a needed name (e.g. a local
-`const Fiber = …`), the synthesized import is aliased to a fresh name
-(`import { Fiber as Fiber_1 } from "effect"`), mirroring the react-jsx transform's
-helper-collision handling.
+A non-import user binding that shadows a needed helper name (e.g. a local
+`const Fiber = …` in a file using `join`) collides with the synthesized import and
+surfaces as a normal redeclaration error — rename the local or import the helper
+yourself. (Aliasing the synthesized import is a possible future refinement.)
 
 ## 13. Source maps & original positions
 

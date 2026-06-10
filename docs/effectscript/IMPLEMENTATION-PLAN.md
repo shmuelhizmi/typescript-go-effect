@@ -11,8 +11,25 @@ against the current tree.
 | Phase 0 — spec + golden corpus | ✅ `docs/effectscript/`, `testdata/tests/cases/effectscript/` |
 | Phase 1 — file plumbing (.ets/.etsx, ScriptKinds, `effect`/`effectImportSource` options) | ✅ |
 | Phase 2 v0 — `effect` declarations, `effect {}` blocks, binds (`x <- e`, `<- e`, `(<- e)`), `raise`/`raise.die`, auto-import | ✅ parse-time lowering (`internal/parser/effectscript.go`) |
-| Phase 2 — service/layer/catch/match/par/race/fork/join/using/defer/`|>`/`raises` sugar, export modifiers | 🚧 next |
-| Phase 3+ — dedicated AST kinds + preserve mode, native checking, LSP | ⬜ |
+| Phase 2 — service/layer/catch/match/par/race/fork/join/using/defer/`|>`/`raises` sugar, export modifiers, decorator combinators | ✅ |
+| Phase 2 acceptance — golden corpus harness (`internal/parser/effectscript_corpus_test.go`, `UPDATE_EFFECT_BASELINES=1` to regen) | ✅ |
+| Phase 3+ — dedicated AST kinds + preserve mode, native checking (1810x diagnostics), LSP | ⬜ |
+
+Known v0 deviations / issues (tracked for the native-checking phase):
+
+1. `export default effect f(){}` emits the `Effect.fn` expression directly
+   (no local `f` binding), unlike TRANSPILATION §1.1's two-statement form.
+2. Or-patterns on object-pattern *fields* (`{ status: 301 | 302 }`) test only
+   the first alternative (top-level arm or-patterns work fully).
+3. Declaration emit can elide the synthesized `effect` import even when the
+   emitted `.d.ts` references `Effect.Effect` from the type sugar.
+4. A non-import local binding named like a needed helper (`Fiber`, …)
+   collides with the synthesized import (redeclaration error) instead of
+   aliasing.
+5. Catch/match tag strings are the class *names* (syntax-directed); checker
+   resolution of `_tag` comes with native checking.
+6. The dedicated 1810x diagnostics are not yet emitted; misuse surfaces as
+   ordinary TS parse/type errors.
 
 v0 lowers constructs **at parse time** into plain TS AST (the JSDoc-reparser
 pattern) instead of a separate transform pass — the binder/checker/emitter see
