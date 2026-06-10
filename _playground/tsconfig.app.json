@@ -1,0 +1,18 @@
+{
+    "compilerOptions": {
+        "module": "esnext",
+        "target": "es2022",
+        "moduleResolution": "bundler",
+        "jsx": "react-jsx",
+        "strict": true,
+        "skipLibCheck": true,
+        "sourceMap": true,
+        "isolatedModules": true,
+        "verbatimModuleSyntax": true,
+        "rootDir": "src",
+        "outDir": "node_modules/.ets-cache",
+        "types": ["vite/client"],
+        "lib": ["es2022", "dom", "dom.iterable", "webworker"]
+    },
+    "include": ["src"]
+}

@@ -1,0 +1,62 @@
+// The "Run" tab: executes the latest compiled JS in the sandbox when the Run
+// button bumps the nonce, streaming console output into the pane.
+import { useAtomValue } from "@effect-atom/atom-react"
+import { useEffect, useRef, useState } from "react"
+import { runNonceAtom } from "../state/atoms"
+import { useAtomCompileResult } from "../ui/useCompile"
+import { runInSandbox, type ConsoleLine } from "./sandbox"
+
+export function RunPane() {
+  const runNonce = useAtomValue(runNonceAtom)
+  const compile = useAtomCompileResult()
+  const [lines, setLines] = useState<ConsoleLine[]>([])
+  const [status, setStatus] = useState<string>("Press ▶ Run to execute")
+  const hostRef = useRef<HTMLDivElement>(null)
+  const disposeRef = useRef<(() => void) | null>(null)
+
+  const js = compile.kind === "ok" ? compile.result.files[0]?.text ?? null : null
+  const blockers = compile.kind === "ok" ? compile.result.diagnostics.length : 0
+
+  useEffect(() => {
+    if (runNonce === 0 || !hostRef.current) return
+    if (!js) {
+      setStatus(compile.kind === "error" ? "Compile failed — see Errors" : "Still compiling, try again…")
+      return
+    }
+    if (blockers > 0) {
+      setStatus("Source has errors — see the Errors tab")
+      return
+    }
+    setLines([])
+    setStatus("running…")
+    disposeRef.current?.()
+    let cancelled = false
+    void runInSandbox(js, hostRef.current, line => {
+      if (!cancelled) setLines(prev => [...prev, line])
+    }).then(dispose => {
+      if (cancelled) dispose()
+      else disposeRef.current = dispose
+    })
+    return () => {
+      cancelled = true
+    }
+    // Rerun only when the button is pressed, not on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runNonce])
+
+  useEffect(() => () => disposeRef.current?.(), [])
+
+  return (
+    <div className="pane run-pane">
+      {lines.length === 0 ? <div className="pane-empty">{status}</div> : null}
+      <ul className="console-list">
+        {lines.map((line, i) => (
+          <li key={i} className={`console-line console-${line.level}`}>
+            {line.text}
+          </li>
+        ))}
+      </ul>
+      <div ref={hostRef} className="sandbox-host" />
+    </div>
+  )
+}

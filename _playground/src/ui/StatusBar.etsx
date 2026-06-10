@@ -1,0 +1,28 @@
+// Worker/LSP status indicator.
+import { useEffect, useState } from "react"
+import { getWorkerClient, type WorkerStatus } from "../compiler/worker-client"
+import { initialSource } from "../examples"
+
+const LABELS: Record<WorkerStatus, string> = {
+  booting: "⏳ loading compiler…",
+  ready: "● compiler ready",
+  failed: "✕ compiler failed",
+}
+
+export function StatusBar() {
+  const [status, setStatus] = useState<WorkerStatus>("booting")
+  const [detail, setDetail] = useState<string | undefined>(undefined)
+  useEffect(
+    () =>
+      getWorkerClient(initialSource).onStatus((s, d) => {
+        setStatus(s)
+        setDetail(d)
+      }),
+    [],
+  )
+  return (
+    <span className={`status status-${status}`} title={detail}>
+      {LABELS[status]}
+    </span>
+  )
+}

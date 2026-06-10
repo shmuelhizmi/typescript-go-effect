@@ -1,0 +1,40 @@
+// Playground layout: editor on the left, output tabs on the right —
+// the familiar TypeScript Playground shape.
+import { useAtomValue } from "@effect-atom/atom-react"
+import { Editor } from "./editor/Editor"
+import { RunPane } from "./runner/RunPane"
+import { ErrorsPane } from "./ui/ErrorsPane"
+import { JsPane } from "./ui/JsPane"
+import { StatusBar } from "./ui/StatusBar"
+import { Tabs } from "./ui/Tabs"
+import { ExamplePicker, RunButton, ShareButton } from "./ui/Toolbar"
+import { activeTabAtom } from "./state/atoms"
+
+export function App() {
+  const activeTab = useAtomValue(activeTabAtom)
+  return (
+    <div className="app">
+      <header className="header">
+        <h1>EffectScript Playground</h1>
+        <ExamplePicker />
+        <RunButton />
+        <ShareButton />
+        <span className="spacer" />
+        <StatusBar />
+      </header>
+      <main className="main">
+        <section className="editor-pane">
+          <Editor />
+        </section>
+        <section className="output-pane">
+          <Tabs />
+          <div className="tab-content">
+            {activeTab === "js" ? <JsPane /> : null}
+            {activeTab === "run" ? <RunPane /> : null}
+            {activeTab === "errors" ? <ErrorsPane /> : null}
+          </div>
+        </section>
+      </main>
+    </div>
+  )
+}

@@ -1,0 +1,14 @@
+// The ".JS" tab: latest transpiled output (or the compile failure).
+import { useAtomCompileResult } from "./useCompile"
+
+export function JsPane() {
+  const compile = useAtomCompileResult()
+  if (compile.kind === "initial") return <div className="pane pane-empty">compiling…</div>
+  if (compile.kind === "error") return <div className="pane pane-error">{compile.message}</div>
+  const js = compile.result.files[0]?.text ?? "// no output"
+  return (
+    <div className="pane">
+      <pre className="code-output">{js}</pre>
+    </div>
+  )
+}

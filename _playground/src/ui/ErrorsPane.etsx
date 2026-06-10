@@ -1,0 +1,64 @@
+// The "Errors" tab: live markers from the LSP (the editor squiggles) plus
+// any syntactic/config diagnostics from the last compile.
+import { useEffect, useState } from "react"
+import * as monaco from "monaco-editor"
+import { useAtomCompileResult } from "./useCompile"
+
+interface ErrorLine {
+  location: string
+  message: string
+  severity: "error" | "warning" | "info"
+}
+
+function useMarkers(): ErrorLine[] {
+  const [markers, setMarkers] = useState<ErrorLine[]>([])
+  useEffect(() => {
+    const read = () =>
+      setMarkers(
+        monaco.editor.getModelMarkers({}).map(m => ({
+          location: `main.ets(${m.startLineNumber},${m.startColumn})`,
+          message: m.code ? `TS${m.code}: ${m.message}` : m.message,
+          severity: m.severity >= monaco.MarkerSeverity.Error
+            ? "error"
+            : m.severity >= monaco.MarkerSeverity.Warning
+              ? "warning"
+              : "info",
+        })),
+      )
+    read()
+    const subscription = monaco.editor.onDidChangeMarkers(read)
+    return () => subscription.dispose()
+  }, [])
+  return markers
+}
+
+export function ErrorsPane() {
+  const markers = useMarkers()
+  const compile = useAtomCompileResult()
+  const compileErrors: ErrorLine[] =
+    compile.kind === "ok"
+      ? compile.result.diagnostics.map(d => ({
+          location: `${d.file.replace("/project/", "")}(${d.line + 1},${d.character + 1})`,
+          message: `TS${d.code}: ${d.message}`,
+          severity: d.category === "Warning" ? "warning" : "error",
+        }))
+      : []
+
+  // The LSP markers already include syntax errors; only add compile
+  // diagnostics that are not already reported.
+  const seen = new Set(markers.map(m => m.location + m.message))
+  const all = [...markers, ...compileErrors.filter(e => !seen.has(e.location + e.message))]
+
+  if (all.length === 0) return <div className="pane pane-empty">No errors ✓</div>
+  return (
+    <div className="pane">
+      <ul className="errors-list">
+        {all.map((error, i) => (
+          <li key={i} className={`error-item error-${error.severity}`}>
+            <span className="error-location">{error.location}</span> {error.message}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}

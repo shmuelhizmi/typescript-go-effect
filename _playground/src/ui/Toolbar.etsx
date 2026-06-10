@@ -1,0 +1,65 @@
+// Header actions: examples picker, Run, and Share.
+import { useAtomSet, useAtomValue } from "@effect-atom/atom-react"
+import { useState } from "react"
+import { setEditorText } from "../editor/Editor"
+import { EXAMPLES, loadExample } from "../examples"
+import { runNonceAtom, sourceAtom, activeTabAtom } from "../state/atoms"
+import { encodeSourceToHash } from "../state/share"
+
+export function ExamplePicker() {
+  const [selected, setSelected] = useState("greeter")
+  return (
+    <select
+      className="example-picker"
+      value={selected}
+      onChange={event => {
+        const id = event.target.value
+        setSelected(id)
+        void loadExample(id).then(setEditorText, error => console.error(error))
+      }}
+    >
+      {EXAMPLES.map(example => (
+        <option key={example.id} value={example.id}>
+          {example.label}
+        </option>
+      ))}
+    </select>
+  )
+}
+
+export function RunButton() {
+  const runNonce = useAtomValue(runNonceAtom)
+  const setRunNonce = useAtomSet(runNonceAtom)
+  const setActiveTab = useAtomSet(activeTabAtom)
+  return (
+    <button
+      className="run-button"
+      onClick={() => {
+        setActiveTab("run")
+        setRunNonce(runNonce + 1)
+      }}
+    >
+      ▶ Run
+    </button>
+  )
+}
+
+export function ShareButton() {
+  const source = useAtomValue(sourceAtom)
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      className="share-button"
+      onClick={() => {
+        const hash = encodeSourceToHash(source)
+        window.history.replaceState(null, "", hash)
+        void navigator.clipboard.writeText(window.location.href).then(() => {
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1500)
+        })
+      }}
+    >
+      {copied ? "copied!" : "Share"}
+    </button>
+  )
+}

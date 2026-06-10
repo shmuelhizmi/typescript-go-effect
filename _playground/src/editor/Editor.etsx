@@ -1,0 +1,54 @@
+// The Monaco editor pane: creates the editor once, pushes edits into
+// sourceAtom, and wires the LSP (diagnostics refresh trails edits).
+import { useAtomSet } from "@effect-atom/atom-react"
+import { useEffect, useRef } from "react"
+import { LspClient } from "../compiler/lsp-client"
+import { getWorkerClient } from "../compiler/worker-client"
+import { initialSource } from "../examples"
+import { sourceAtom } from "../state/atoms"
+import { createPlaygroundEditor, connectLsp, type PlaygroundEditor } from "./setup"
+
+/** Module-level handle so toolbar actions (examples, share) can set text. */
+let activeEditor: PlaygroundEditor | null = null
+
+export function setEditorText(text: string): void {
+  activeEditor?.setValue(text)
+}
+
+export function Editor() {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const setSource = useAtomSet(sourceAtom)
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined
+    let refresh: (() => void) | undefined
+    const playground = createPlaygroundEditor(container, initialSource, text => {
+      setSource(text)
+      clearTimeout(refreshTimer)
+      refreshTimer = setTimeout(() => refresh?.(), 350)
+    })
+    activeEditor = playground
+
+    const client = getWorkerClient(initialSource)
+    let disposed = false
+    void client.ready.then(() => {
+      if (disposed) return
+      return connectLsp(new LspClient(client.lspPort), playground).then(connection => {
+        refresh = connection.refreshDiagnostics
+      })
+    })
+
+    return () => {
+      disposed = true
+      clearTimeout(refreshTimer)
+      activeEditor = null
+      playground.editor.dispose()
+      playground.model.dispose()
+    }
+  }, [setSource])
+
+  return <div className="editor" ref={containerRef} />
+}
