@@ -3,10 +3,12 @@
 **Status:** Draft specification
 **Base:** Fork of [typescript-go](https://github.com/microsoft/typescript-go) (`internal/ls`, `internal/checker`, `internal/compiler`)
 
-> **Implementation status:** the core of this spec is implemented at `cmd/tsagent` /
-> `internal/tsagent`. See the [user manual](../cmd/tsagent/README.md) for the
-> commands and flags that actually exist today (including an honest limitations
-> list of spec'd features that are not implemented yet), and the
+> **Implementation status:** this spec is implemented end-to-end at `cmd/tsagent` /
+> `internal/tsagent` — all ten command families (`map`, `nav`, `type`, `refactor`,
+> `analyze`, `diagram`, `check`, `context`, `api`, `serve`), 60 commands in total.
+> The [user manual](../cmd/tsagent/README.md) is the authoritative reference for
+> the commands and flags as shipped; the remaining per-command gaps are listed in
+> its Limitations section. See the
 > [implementation plan](./agent-cli-implementation-plan.md) for the architecture.
 > Where this document and the README disagree, the README describes shipped
 > behavior; this document remains the target design.

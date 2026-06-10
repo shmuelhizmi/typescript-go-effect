@@ -17,7 +17,7 @@ go build -o ~/.local/bin/tsagent ./cmd/tsagent
 
 ## Quickstart
 
-All examples below are real output against the test fixture project (`testdata/tsagent/fixture`, a small strict-mode project with a planted type error, an import cycle, and a non-exhaustive switch). Run `tsagent` from anywhere inside a project — the nearest `tsconfig.json` is discovered automatically, or pass `--project <tsconfig|dir>`.
+All examples below are real output against the test fixture project (`testdata/tsagent/fixture`, a small strict-mode project with a planted type error, an import cycle, a non-exhaustive switch, a structural clone pair, and a discriminated-union state machine). Run `tsagent` from anywhere inside a project — the nearest `tsconfig.json` is discovered automatically, or pass `--project <tsconfig|dir>`.
 
 **1. Orient yourself — outline a file (or a whole directory):**
 
@@ -128,15 +128,15 @@ Refactor commands also accept the target as the first positional argument and gu
 ## Command reference
 
 Global flags (valid on every command, anywhere after `<family> <command>`):
-`--project <tsconfig|dir>` · `--raw` · `--format json|text|ndjson` · `--limit N` · `--offset N`
+`--project <tsconfig|dir>` · `--raw` · `--format json|text|ndjson` · `--limit N` · `--offset N` · `--connect never|auto|require` (route through a running `tsagent serve` daemon; see the daemon section)
 
 ### `map` — orientation
 
 | Command | Description | Flags |
 |---|---|---|
-| `map outline <path…>` | Symbol tree per file/folder with ranges and signatures | `--depth N\|top-level\|all` (default `all`), `--exported-only`, `--kind class,interface,function,…` |
+| `map outline <path…>` | Symbol tree per file/folder with ranges and signatures | `--depth N\|top-level\|all` (default `all`), `--exported-only`, `--kind class,interface,function,…`, `--detail names\|signatures\|full` (default `signatures`; `full` adds the first JSDoc line), `--with-ref-counts` (with `--detail full`, approximate ref counts for top-level exports; expensive) |
 | `map search <query>` | Project-wide fuzzy symbol search returning symbol IDs | `--kind …`, `--exported-only`, `--path-glob <glob>` |
-| `map files` | Program file inventory with classification (source/lib/declaration) | — |
+| `map files` | Program file inventory with classification (source/lib/declaration) | `--why <file>` (explain why a file is in the program: root / lib / shortest import chains from root files), `--max-chains N` (default 3) |
 | `map stats` | Per-directory counts of files, lines, symbols, exports | — |
 
 ### `nav` — navigation & graph queries
@@ -149,6 +149,20 @@ Global flags (valid on every command, anywhere after `<family> <command>`):
 | `nav calls <target>` | Call hierarchy tree with cycle marking | `--symbol`, `--name`, `--direction in\|out\|both` (default `in`), `--depth N` (default 3) |
 | `nav graph` | Module dependency graph with cycle detection | `--scope file\|dir`, `--cycles` (SCCs only), `--externals` |
 | `nav path --from <file> --to <file>` | Shortest import chain(s) between two files | `--from`, `--to`, `--max-paths N` |
+| `nav types <target>` | Type hierarchy of a class/interface: supertypes (`extends`/`implements`) and subtypes | `--symbol`, `--name`, `--direction up\|down\|both` (default `both`), `--depth N` (0 = unlimited), `--structural` (include implicit structural implementers) |
+| `nav shape '<pattern>'` | Find functions matching a signature pattern `(<type>, …) => <type>`; `*` is a wildcard, trailing `, ...` allows extra params | `--kind function,method,arrow`, `--exported-only`, `--path-glob <glob>` |
+| `nav export-graph <target>` | Re-export/barrel flow of a symbol: every re-export hop and public name it is reachable as | `--symbol`, `--name` |
+
+`nav types` against the fixture hierarchy (`Dog implements Animal`, `Puppy extends Dog`):
+
+```
+$ tsagent nav types --name Dog
+Dog  src/models.ts:9  src/models.ts#Dog
+up
+  Animal  src/models.ts:4  src/models.ts#Animal  implements
+down
+  Puppy  src/models.ts:17  src/models.ts#Puppy  extends
+```
 
 ### `type` — type intelligence
 
@@ -159,17 +173,91 @@ Global flags (valid on every command, anywhere after `<family> <command>`):
 | `type coverage [path…]` | `any`/`unknown` expressions, casts, non-null assertions, ts-ignores per file | `--threshold <pct>` (exit 1 when project any% exceeds it) |
 | `type complexity [path…]` | Structural complexity of exported type aliases/interfaces/classes | `--symbol`, `--threshold N`, `--rank` (default true), `--top N` (default 50) |
 | `type instantiations <generic-target>` | Best-effort list of concrete instantiations of a generic (via find-references) | — |
+| `type explain-error <file:line:col \| diagRef>` | Decompose a diagnostic into its causal message chain, plus a property-wise assignability drill-down | — |
+| `type flow <target>` | Control-flow narrowing trace for a variable: its flow type at every reference in the declaring file | — |
+| `type infer [path…]` | Suggest types for unannotated parameters and returns (usage- and inference-based) | `--symbol <target>` (one function instead of paths), `--fix-plan` (emit an annotation edit set for `refactor apply-edits`) |
+
+A *diagRef* is the stable diagnostic handle `file:bytePos:TSnnnn` printed by `check` (JSON output) and `type explain-error`; `check fix` consumes them too.
+
+`type flow` over the narrowed switch in the fixture:
+
+```
+$ tsagent type flow src/shapes.ts:23:31
+shape  (declared: Shape)  src/shapes.ts
+    23:31   export function describeShape(shape: Shape): string {  Shape  [declaration]
+    24:13   switch (shape.kind) {                                  Shape
+    26:32   return `circle r=${shape.radius}`;                     Circle  (narrowed from Shape)
+    28:32   return `square s=${shape.side}`;                       Square  (narrowed from Shape)
+```
 
 ### `refactor` — transactional mutations
 
-All refactor commands share the transaction flags `--apply` and `--allow-errors` (see Transactions below). Targeted commands (`rename`, `safe-delete`) share `--at file:line:col`, `--symbol <id>`, `--name <n>`, `--kind <k>`.
+All refactor commands share the transaction flags `--apply` and `--allow-errors` (see Transactions below). Targeted commands (`rename`, `safe-delete`, `inline`, `mv-symbol`, `signature`) share `--at file:line:col`, `--symbol <id>`, `--name <n>`, `--kind <k>` (or pass the target as the first positional argument).
 
 | Command | Description | Extra flags |
 |---|---|---|
 | `refactor rename <target> <new-name>` | Rename a symbol across the project (imports, strings in import paths, etc.) | — |
 | `refactor mv <from…> <to>` | Move files with all import specifiers updated (`<to>` may be a directory) | — |
 | `refactor organize-imports [path…]` | Sort, merge, and remove unused imports | — |
-| `refactor safe-delete <target>` | Delete a symbol only if nothing references it | `--cascade` (declared, **not implemented** — exits 2) |
+| `refactor safe-delete <target>` | Delete a symbol only if nothing references it | `--cascade` (also delete unexported top-level symbols that become dead as a result, recursively; the cascade tree is reported in the notes) |
+| `refactor apply-edits [file\|-]` | Apply a machine-generated edit set (JSON, same shape as `check --with-edits`) or a unified diff as one transaction | `--diff` (input is a unified diff instead of edits JSON) |
+| `refactor exports --to named\|default <file…>` | Convert default ↔ named exports with all import sites updated | `--to named\|default` (required) |
+| `refactor mv-symbol <target> --to <file>` | Move a top-level declaration to another file, fixing imports both ways | `--to <file>` (required), `--create` (create the destination file) |
+| `refactor inline <target>` | Inline a const variable or simple (single-return) function at all usage sites and delete the declaration | — |
+| `refactor extract --range <r> --into constant\|function --name <n>` | Extract an expression to a constant or statements to a function | `--range file:startLine:startCol-endLine:endCol` (1-based, end-exclusive column), `--into`, `--name` |
+| `refactor signature <target> --ops <json>` | Change a function signature (add/remove/reorder params), updating all call sites | `--ops '[{"op":"add","name":"x","type":"number","default":"1","index":0},{"op":"remove","name":"x"},{"op":"reorder","order":[1,0]}]'`, `--fill-with <expr>` (call-site value for new params without a default), `--force` (remove params even when used in the body) |
+
+`refactor extract` dry-run against the fixture (note how the diff is the answer):
+
+```
+$ tsagent refactor extract --range src/shapes.ts:37:20-37:47 --into constant --name circleArea
+--- a/src/shapes.ts
++++ b/src/shapes.ts
+@@ -34,7 +34,8 @@
+ export function area(shape: Shape): number {
+     switch (shape.kind) {
+         case "circle":
+-            return Math.PI * shape.radius ** 2;
++            const circleArea = Math.PI * shape.radius ** 2;
++            return circleArea;
+         case "square":
+             return shape.side ** 2;
+         case "triangle":
+dry-run: 1 file(s) would change (pass --apply to write)
+```
+
+### `context` — LLM context curation
+
+| Command | Description | Flags |
+|---|---|---|
+| `context pack <target…>` | Budgeted, prioritized source slices for symbols: declaration + type dependencies (one hop) + usage examples from other files | `--symbol`, `--name`, `--token-budget N` (default 4000; tokens ≈ bytes/4), `--usage-examples N` (default 2), `--for edit\|review\|explain` (tunes slice ordering) |
+| `context expand <file:line[:col]>` | Expand a position to its semantic enclosure (or ±N lines) plus the types used inside | `--radius semantic\|N` (default `semantic`), `--token-budget N` (default 2000) |
+| `context delta --since <git-ref>` | Changed symbols since a git ref plus their blast radius (dependent files), as ready-to-paste review context | `--since <ref>` (required), `--max-dependents N` (default 5) |
+
+`context pack` against the fixture — declaration first, then the types it needs, then a real usage:
+
+```
+$ tsagent context pack describeShape
+=== src/shapes.ts (lines 23-31) ===
+export function describeShape(shape: Shape): string {
+    switch (shape.kind) {
+        ...
+    return "unknown shape";
+}
+
+=== src/shapes.ts (lines 20-20) ===
+export type Shape = Circle | Square | Triangle;
+
+=== src/index.ts (lines 15-23) ===
+    const shape: Shape = { kind: "circle", radius: counts.get() };
+    return [
+        ...
+        describeShape(shape),
+        ...
+}
+
+~132 estimated tokens (budget 4000)
+```
 
 ### `analyze` — quality & analysis
 
@@ -180,6 +268,20 @@ All refactor commands share the transaction flags `--apply` and `--allow-errors`
 | `analyze unused-deps` | package.json dependencies vs. actual imports (unused + phantom) | `--dev` (include devDependencies; default true) |
 | `analyze complexity [path…]` | Cyclomatic + cognitive + type complexity hotspots per function | `--top N` (default 25) |
 | `analyze exhaustiveness [path…]` | Switches over literal unions/enums that miss variants | `--strict` (report even with a `default` clause) |
+| `analyze duplicates [path…]` | AST-based structural clone detection (exact-structure clone classes; identifiers/literals normalized) | `--min-nodes N` (default 25), `--cross-file-only` |
+| `analyze side-effects <target…>` | Purity verdict per function (transitive, following calls): targets are `file:line:col`, symbol IDs, or names | `--module [path…]` (classify top-level side effects of files instead), `--depth N` (default 3 call levels in function mode) |
+| `analyze barrel-cost` | Barrel files, their transitive import cost, and direct-import rewrites | `--min-reexports N` (default 3), `--fix-plan` (emit an edit set replacing barrel imports with direct imports) |
+| `analyze churn-risk` | High-churn × high-reference symbols (requires git history) | `--since <window>` (default `"6 months ago"`), `--top N` (default 25) |
+
+`analyze duplicates` against the planted clone pair in the fixture:
+
+```
+$ tsagent analyze duplicates
+clone class 1: 2 members, 36 nodes (exact-structure)
+  src/dup.ts:4-12  sumPositiveSquares
+  src/dup.ts:14-22  sumPositiveWeights
+total: 1 clone class(es)
+```
 
 ### `diagram` — diagram generation
 
@@ -188,12 +290,30 @@ All refactor commands share the transaction flags `--apply` and `--allow-errors`
 | `diagram deps [path…]` | Module dependency diagram, cycles highlighted | `--out mermaid\|dot\|json`, `--cluster-by dir`, `--externals`, `--cycles-only`, `--neighbors` (default true) |
 | `diagram classes [path…]` | Class/interface diagram: inheritance, implementation, composition | `--out …`, `--symbol <id>` + `--depth N`, `--members signatures\|names\|none`, `--include-aliases`, `--composition`, `--collapse-external` (default true) |
 | `diagram calls <target>` | Call-graph diagram from a root symbol | `--out …`, `--symbol`, `--name`, `--direction in\|out\|both` (default `out`), `--depth N` (default 3) |
+| `diagram flow <target>` | Control-flow graph of one function (structural CFG) | `--out mermaid\|dot\|json`, `--symbol`, `--name` |
+| `diagram state <type-target>` | State machine from a discriminated union: states are the discriminant literals, transitions are project functions whose first parameter and return type relate to the union | `--out mermaid\|dot\|json`, `--symbol`, `--name`, `--discriminant <prop>` (default: auto-detected) |
+
+`diagram state` over the fixture's `Shape` union and its transition functions:
+
+```
+$ tsagent diagram state --name Shape
+stateDiagram-v2
+  circle: circle
+  square: square
+  triangle: triangle
+  circle --> square: squareUp
+  square --> circle: roll
+  square --> square: squareUp
+  triangle --> square: squareUp
+```
 
 ### `check` — diagnostics & speculative edits
 
 | Command | Description | Flags |
 |---|---|---|
 | `check [path…]` | Batch diagnostics with filters | `--suggestions`, `--severity error,warning,…`, `--code TS2322,…`, `--path-glob <glob>`, `--with-diff <patch>`, `--with-edits <json>`, `--fail-on-regression` |
+| `check fix <diagRef…>` or `check fix --code TSnnnn` | Apply language-service code fixes for diagnostics, as a transaction (dry-run by default; `--apply`/`--allow-errors` as for refactors) | `--code TS2322,…` (fix every fixable diagnostic with these codes; mutually exclusive with diagRef args), `--fix-id <text>` (pick among several fixes by title substring; default first) |
+| `check watch` | Stream diagnostics deltas as ndjson while files change (poll-based) | `--interval <dur>` (default `2s`), `--max-rebuilds N` (0 = run until SIGINT/SIGTERM); always emits ndjson, `--format` is ignored |
 
 Path globs use tsconfig include syntax (e.g. `src/**/*`, `src/*.ts`).
 
@@ -203,6 +323,7 @@ Path globs use tsconfig include syntax (e.g. `src/**/*`, `src/*.ts`).
 |---|---|---|
 | `api surface [entry…]` | Public API surface as a stable, sorted report with a content digest | — |
 | `api diff --base <git-ref>` | Breaking-change classification between two API surfaces | `--base` (required), `--head` (default: working tree), `--fail-on breaking\|possibly-breaking` |
+| `api docs [entry…]` | Structured docs (JSDoc summary + tags + resolved types) per exported symbol | `--symbol <id>` / `--name <n>` (document one symbol instead of entry files) |
 
 ### `serve` — session daemon
 
@@ -211,10 +332,13 @@ Path globs use tsconfig include syntax (e.g. `src/**/*`, `src/*.ts`).
 | `serve` | Start the daemon (ndjson JSON-RPC) | `--stdio`, `--socket` (default mode; socket path printed to stdout), `--socket-path <path>` |
 | `serve status` | Query a running daemon (memory, program size, overlays, rebuilds) | `--socket-path` |
 | `serve stop` | Shut down a running daemon | `--socket-path` |
+| `serve reload` | Force a running daemon to rebuild its program | `--socket-path` |
+| `serve overlay set <file> \| drop <file…> \| list` | Manage overlays on a running daemon (`set` reads content from `--from <path>` or stdin) | `--socket-path`, `--from <path>` |
+| `serve snapshot save\|restore\|drop <name> \| list` | Manage named overlay snapshots on a running daemon | `--socket-path` |
 
 ## Transactions: dry-run by default
 
-Every `refactor` command follows the same contract:
+Every `refactor` command (and `check fix`) follows the same contract:
 
 1. **Dry-run is the default.** The command computes the full edit set and prints unified diffs plus `dry-run: N file(s) would change (pass --apply to write)`. Nothing is written.
 2. **`--apply` writes atomically.** Before writing, tsagent rebuilds the program in memory with the edits applied and compares diagnostics. If **new** errors would appear, the apply is **refused** (exit 4), the new errors are listed, and the disk is untouched. Pre-existing errors elsewhere in the project do not block — only the *delta* matters.
@@ -266,10 +390,25 @@ Admin methods:
 - `session/status` — uptime, program file count, overlay count, rebuild count, heap stats.
 - `session/overlays/set` `{"file": "src/a.ts", "content": "…"}` — shadow a file with unsaved content (subsequent queries see it).
 - `session/overlays/drop` `{"files": ["src/a.ts"]}` / `session/overlays/list`.
+- `session/snapshot/save|restore|drop` `{"name": "…"}` / `session/snapshot/list` — named snapshots of the current overlay set (see below).
 - `session/reload` — force a full program rebuild.
 - `session/shutdown` — stop the daemon.
 
-Errors map the CLI exit codes onto JSON-RPC codes (`-32602` invalid params, `-32001` not found, `-32002` refused, `-32003` partial). Safety: `refactor --apply` is refused over RPC while overlays are present (overlays would shadow the disk writes) — drop overlays first. `tsagent serve status` / `tsagent serve stop` are thin one-shot clients for the socket.
+Errors map the CLI exit codes onto JSON-RPC codes (`-32602` invalid params, `-32001` not found, `-32002` refused, `-32003` partial). Safety: `refactor --apply` is refused over RPC while overlays are present (overlays would shadow the disk writes) — drop overlays first. `tsagent serve status|stop|reload|overlay|snapshot` are thin one-shot clients for the socket.
+
+### `--connect`: routing one-shot commands through the daemon
+
+Every non-`serve` command takes the global flag `--connect never|auto|require`:
+
+- `never` (default) — build a fresh local program, ignore any daemon.
+- `auto` — if the project's daemon socket exists, run the command on the daemon (warm program, overlays visible); if the daemon is unreachable, print a note to stderr and fall back to a local run.
+- `require` — fail (exit 1) if the daemon cannot be reached.
+
+The daemon renders text/ndjson through the same output layer, so routed output is byte-identical to a local run, exit codes included. The `serve` family itself always runs locally, and streaming commands (`check watch`) are not suitable for routing.
+
+### Overlay snapshots
+
+`serve snapshot save <name>` captures the daemon's current overlay set under a name; `restore <name>` replaces the live overlays with the snapshot's (triggering a rebuild); `drop <name>` discards it. Snapshots let an agent checkpoint a speculative editing session — try an approach in overlays, snapshot it, try another, and restore the better one. Snapshots live in daemon memory only; they are lost when the daemon exits.
 
 ## Agent integration tips
 
@@ -277,20 +416,72 @@ Errors map the CLI exit codes onto JSON-RPC codes (`-32602` invalid params, `-32
 - **Chain by symbol ID.** `map search <name>` → copy the `path#name` ID → `nav refs --symbol <id>` / `type at --symbol <id>` / `refactor rename --symbol <id> NewName`. IDs are project-root-relative and stable across invocations and cwd changes.
 - **Gate your edits.** Pipe your candidate patch through `check --with-diff - --fail-on-regression` before writing files; or just let `refactor … --apply` refuse on regressions (exit 4) and read the listed new errors.
 - **Page big results.** `--limit`/`--offset` work on every list result; truncation is always announced.
-- **Probe before deleting.** `analyze dead-code` → `refactor safe-delete --name <sym>` (it refuses if anything still references the symbol) → `refactor organize-imports` to clean up imports that became unused.
+- **Probe before deleting.** `analyze dead-code` → `refactor safe-delete --name <sym>` (it refuses if anything still references the symbol; add `--cascade` to also sweep unexported symbols that become dead) → `refactor organize-imports` to clean up imports that became unused.
+- **Pack context, don't paste files.** `context pack <symbol> --token-budget N` gives a budgeted declaration + type deps + usage slice; `context delta --since <ref>` summarizes a branch for review.
 - **Use exit codes.** 3 means "your target doesn't exist" (typo'd name), 4 means "refused, would break the build", 2 means "you called it wrong".
 
 ## Limitations
 
-Honest list of where the implementation currently stops short of the spec (`docs/agent-cli-spec.md`):
+All ten families of the spec (`docs/agent-cli-spec.md`) are implemented. What follows is the honest per-command list of where v1 stops short.
 
-- **Spec'd commands not yet implemented:** `nav types|shape|export-graph`; `type explain-error|infer|flow`; `refactor mv-symbol|extract|inline|signature|exports|modules|apply-edits`; `analyze duplicates|side-effects|churn-risk|barrel-cost`; `diagram flow|state`; `check fix|watch`; the entire `context` family (`pack|expand|delta`); `api docs`; `serve snapshot save|restore` (snapshots are not implemented).
-- **No CLI auto-connect / `--connect` routing.** One-shot commands always build a fresh program; they do not transparently route to a running daemon. The daemon is reachable only via its RPC protocol (or `serve status`/`serve stop`). Overlay management likewise has no CLI subcommands — RPC `session/overlays/*` only.
-- **`refactor safe-delete --cascade`** is declared but not implemented (exits 2); deleting a symbol does not cascade to symbols that become dead.
-- **`type instantiations` is best-effort:** derived from find-all-references, so only explicit type-argument references and resolved call/new sites are counted; inferred or indirect instantiations can be missed.
-- **`type assignable` accepts targets only** (positions / symbol IDs), not arbitrary type expressions; its failure drill-down is an approximate property-wise comparison, not the checker's native elaboration chain.
-- **`analyze dead-code` is v1-tiered:** it covers per-file locals and unexported module members (confidence `certain`, downgraded to `dynamic-risk` under dynamic access patterns). Exported symbols are only analyzed with `--include-exports`/`--entry`.
-- **`api diff` compares type display strings** (v1), so a purely cosmetic change in how a type renders can be classified as possibly-breaking.
-- **`refactor mv` moves files, not directories** (move the contained files individually).
+**General**
+
 - **One tsconfig at a time.** The workspace is a single parsed project; project references are not fanned out.
 - The diagnostics gate and speculative checks build a second full program in memory — on very large projects expect `--apply`/`--with-diff` to cost roughly one extra type-check.
+
+**refactor**
+
+- **`apply-edits`** takes byte offsets against the files' *current* content and does no offset remapping; `--diff` mode applies each parsed patch as a whole-file replacement.
+- **`safe-delete --cascade`** sweeps unexported *top-level* symbols only (no class members), can leave now-unused import specifiers behind (run `organize-imports` after), and caps at 10 cascade rounds.
+- **`exports`** refuses re-exported defaults (`export { default } from`), `export =`, and namespace exports; on `--to default`, namespace-import consumers (`import * as ns`) are noted but not rewritten.
+- **`mv-symbol`** moves a single declaration only (no overloads or merged declarations), refuses symbols that reference file-local unexported dependencies (`--with-deps` is not implemented), refuses consumers that reach the symbol through namespace imports or re-exports, does not move default exports, and prepends new import statements rather than merging into existing ones.
+- **`inline`** handles const variables and single-return functions; its side-effect analysis for arguments is conservative; it is all-or-nothing (one un-inlinable site refuses the whole transaction).
+- **`extract`** supports `--into constant|function` only (no type extraction) and refuses ranges containing `return`, producing more than one output value, or writing to outer locals.
+- **`signature`** does add/remove/reorder only (no parameter retyping), refuses call sites that use spread arguments, and leaves non-call references (e.g. the function passed as a callback) untouched — the diagnostics gate is the backstop there.
+- **`mv` moves files, not directories** (move the contained files individually).
+
+**nav**
+
+- **`types --structural`** matches direct implementers at depth 1 only; an empty interface structurally matches everything; classes nested inside other declarations are not scanned.
+- **`shape`** matches on textually normalized type display strings (case-sensitive), not assignability; optional parameters count as declared.
+- **`export-graph`** does not track `export default`/`export =` re-export forms; barrel resolution uses an `index.*` heuristic and does not consult `package.json` `main`.
+
+**type**
+
+- **`explain-error`**'s drill-down is an approximate property-wise decomposition, not the checker's native elaboration chain (the chain itself is the checker's).
+- **`flow`** traces within the declaring file only. (The reported types *are* flow-narrowed — `GetTypeAtLocation` does the real thing.)
+- **`infer`** skips rest/binding-pattern/initializer parameters; usage-based union suggestions cap at 4 distinct types.
+- **`instantiations`** is best-effort: derived from find-all-references, so only explicit type-argument references and resolved call/new sites are counted.
+- **`assignable`** accepts targets only (positions / symbol IDs), not arbitrary type expressions; its drill-down is the same approximation as `explain-error`'s.
+
+**context**
+
+- **`pack`** collects type dependencies one hop out, not transitively; token counts are the bytes/4 estimate everywhere.
+- **`delta`** uses `git diff` semantics, so brand-new untracked files are invisible; change attribution is at top-level-declaration granularity.
+
+**analyze**
+
+- **`duplicates`** finds exact-structure (type-2) clones only — no near-miss detection.
+- **`side-effects`** uses a small name-based denylist of known-impure builtins; method calls on object values classify as `unknown`; no dynamic-dispatch resolution.
+- **`barrel-cost`** offers no rewrite suggestion for default/namespace imports of a barrel, and its `--fix-plan` rewrites do not preserve `type`-only specifiers.
+- **`churn-risk`** attributes file-level git churn to the symbols in the file, and needs git history to say anything.
+- **`dead-code` is v1-tiered:** per-file locals and unexported module members (confidence `certain`, downgraded to `dynamic-risk` under dynamic access patterns); exported symbols only with `--include-exports`/`--entry`.
+
+**check**
+
+- **`fix`** cannot offer import/auto-import fixes in one-shot mode (they need an LSP auto-import index); affected diagnostics are reported as unfixable rather than silently skipped. Isolated-declarations and class-implements fix families work. `--fix-id` matches against the fix action's title.
+- **`watch`** always emits ndjson (ignores `--format`) and is poll-based (default 2s), not fsevents/inotify.
+
+**diagram**
+
+- **`flow`** does not model `switch` fallthrough between case bodies, and draws a single exception edge per `try`.
+- **`state`** scans direct function signatures only — top-level function declarations and function-valued consts; no methods, no `Promise` unwrapping.
+
+**api**
+
+- **`diff` compares type display strings** (v1), so a purely cosmetic change in how a type renders can be classified as possibly-breaking.
+
+**serve**
+
+- Snapshots are held in daemon memory and lost on exit.
+- `--connect` defaults to `never`; streaming commands (`check watch`) are not suitable for routing. A stale socket under `--connect auto` costs one failed dial and a stderr note before falling back to a local run.

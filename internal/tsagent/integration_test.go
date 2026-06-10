@@ -98,7 +98,7 @@ func TestFixtureIntegration(t *testing.T) {
 		for _, cmd := range cli.Commands() {
 			families[cmd.Family] = true
 		}
-		for _, want := range []string{"map", "nav", "type", "refactor", "analyze", "diagram", "check", "api", "serve"} {
+		for _, want := range []string{"map", "nav", "type", "refactor", "analyze", "diagram", "check", "context", "api", "serve"} {
 			if !families[want] {
 				t.Errorf("no commands registered for family %q", want)
 			}
@@ -250,6 +250,90 @@ func TestFixtureIntegration(t *testing.T) {
 		result := mustInvoke(t, ws, "api", "surface", "src/index.ts")
 		text := render(t, result, cli.FormatText, 0, 0)
 		assertContains(t, text, "digest sha256:", "function main", "function area")
+	})
+
+	t.Run("context pack", func(t *testing.T) {
+		result := mustInvoke(t, ws, "context", "pack", "describeShape")
+		text := render(t, result, cli.FormatText, 0, 0)
+		assertContains(t, text,
+			"=== src/shapes.ts",                               // declaration slice header
+			"export function describeShape",                   // the declaration itself
+			"export type Shape = Circle | Square | Triangle;", // one-hop type dep
+			"estimated tokens (budget 4000)",                  // budget line (default budget)
+		)
+		jsonOut := render(t, result, cli.FormatJSON, 0, 0)
+		assertContains(t, jsonOut, `"tokenBudget": 4000`, `"estimatedTokens"`, `"slices"`)
+	})
+
+	t.Run("nav types hierarchy", func(t *testing.T) {
+		result := mustInvoke(t, ws, "nav", "types", "--name", "Dog")
+		text := render(t, result, cli.FormatText, 0, 0)
+		assertContains(t, text,
+			"src/models.ts#Dog",
+			"up",
+			"Animal", "implements",
+			"down",
+			"Puppy", "extends",
+		)
+	})
+
+	t.Run("type explain-error on the planted error", func(t *testing.T) {
+		result := mustInvoke(t, ws, "type", "explain-error", "src/broken.ts:4:14")
+		text := render(t, result, cli.FormatText, 0, 0)
+		assertContains(t, text,
+			"src/broken.ts:4:14",
+			"TS2322",
+			"Type 'string' is not assignable to type 'number'.",
+			"drilldown:",
+		)
+	})
+
+	t.Run("refactor extract dry run", func(t *testing.T) {
+		result := mustInvoke(t, ws, "refactor", "extract",
+			"--range", "src/shapes.ts:37:20-37:47", "--into", "constant", "--name", "circleArea")
+		tx, ok := result.(*core.TxResult)
+		if !ok {
+			t.Fatalf("refactor extract result is %T, want *core.TxResult", result)
+		}
+		if tx.Applied {
+			t.Error("dry-run extract must not be applied")
+		}
+		text := render(t, result, cli.FormatText, 0, 0)
+		assertContains(t, text,
+			"-            return Math.PI * shape.radius ** 2;",
+			"+            const circleArea = Math.PI * shape.radius ** 2;",
+			"+            return circleArea;",
+			"dry-run:",
+		)
+		// The dry run must not touch the disk.
+		onDisk, err := ws.FileOf("src/shapes.ts")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(onDisk.Text(), "circleArea") {
+			t.Error("dry-run extract modified the fixture on disk")
+		}
+	})
+
+	t.Run("analyze duplicates finds the planted clone pair", func(t *testing.T) {
+		result := mustInvoke(t, ws, "analyze", "duplicates")
+		text := render(t, result, cli.FormatText, 0, 0)
+		assertContains(t, text,
+			"clone class",
+			"2 members",
+			"src/dup.ts", "sumPositiveSquares", "sumPositiveWeights",
+		)
+	})
+
+	t.Run("diagram state from the Shape union", func(t *testing.T) {
+		result := mustInvoke(t, ws, "diagram", "state", "--name", "Shape")
+		text := render(t, result, cli.FormatText, 0, 0)
+		assertContains(t, text,
+			"stateDiagram-v2",
+			"circle", "square", "triangle", // the union's states
+			"circle --> square: squareUp", // Shape -> Square transition
+			"square --> circle: roll",     // Square -> Circle transition
+		)
 	})
 }
 
