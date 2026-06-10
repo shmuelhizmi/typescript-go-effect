@@ -1111,6 +1111,10 @@ func (p *Parser) parseMatchArm(tagMode bool, effectful bool) (arm *ast.Node, isC
 	handler := p.makeArrowWithParam(handlerParam, body, armPos, armEnd)
 
 	switch {
+	case guard != nil && (first.kind == matchPatternBinding || first.kind == matchPatternWildcard):
+		// `m if cond >> body` — a guarded binding arm is conditional.
+		pred := p.makeMatchGuardPredicate(first, guard, armPos, armEnd)
+		return p.makeHelperCall("Match", "when", []*ast.Node{pred, handler}, armPos, armEnd), false
 	case first.kind == matchPatternWildcard || first.kind == matchPatternBinding:
 		return p.makeHelperCall("Match", "orElse", []*ast.Node{handler}, armPos, armEnd), true
 	case first.kind == matchPatternTag || tagMode:
@@ -1424,7 +1428,7 @@ func (p *Parser) parseUsingBindStatement() *ast.Statement {
 	acquire := p.parseAssignmentExpressionOrHigher()
 
 	var operand *ast.Expression
-	if p.token == ast.KindIdentifier && p.scanner.TokenValue() == "release" && !p.hasPrecedingLineBreak() {
+	if p.token == ast.KindIdentifier && p.scanner.TokenValue() == "release" && p.lookAhead((*Parser).nextIsReleaseClause) {
 		p.nextToken() // consume 'release'
 		p.parseExpected(ast.KindOpenParenToken)
 		var params []*ast.Node
@@ -1454,6 +1458,29 @@ func (p *Parser) parseUsingBindStatement() *ast.Statement {
 	decl := p.finishNodeWithEnd(p.factory.NewVariableDeclaration(name, nil, nil, yieldExpr), pos, end)
 	declList := p.finishNodeWithEnd(p.factory.NewVariableDeclarationList(p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{decl}), ast.NodeFlagsConst), pos, end)
 	return p.finishNodeWithEnd(p.factory.NewVariableStatement(nil, declList), pos, end)
+}
+
+// nextIsReleaseClause: 'release ( ... ) {' — the block disambiguates the
+// clause from a call to a user function named release.
+func (p *Parser) nextIsReleaseClause() bool {
+	if p.nextToken() != ast.KindOpenParenToken {
+		return false
+	}
+	depth := 0
+	for {
+		switch p.token {
+		case ast.KindOpenParenToken:
+			depth++
+		case ast.KindCloseParenToken:
+			depth--
+			if depth == 0 {
+				return p.nextToken() == ast.KindOpenBraceToken
+			}
+		case ast.KindEndOfFile:
+			return false
+		}
+		p.nextToken()
+	}
 }
 
 func (p *Parser) nextIsUsingBind() bool {

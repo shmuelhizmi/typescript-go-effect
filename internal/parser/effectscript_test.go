@@ -373,3 +373,26 @@ effect f(ea: any) {
 `)
 	assert.DeepEqual(t, codes(unreachableCatch), []int32{18151})
 }
+
+func TestEffectScriptReleaseOnNextLine(t *testing.T) {
+	t.Parallel()
+	file := parseETS(t, `
+effect f() {
+  using res <- acquire()
+    release (r) { <- r.close() }
+  return res
+}
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0)
+}
+
+func TestEffectScriptGuardedBindingArm(t *testing.T) {
+	t.Parallel()
+	file := parseETS(t, `
+const sized = match (n) {
+  m if m >= 10 >> m * 2
+  _            >> 0
+};
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0, "guarded binding arm is not a catch-all")
+}
