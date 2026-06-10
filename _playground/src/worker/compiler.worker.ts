@@ -18,6 +18,7 @@ interface TsgoWasm {
     lspWrite(bytes: Uint8Array): void;
     onLspMessage(cb: (bytes: Uint8Array) => void): void;
     writeFile(path: string, content: string): string | null;
+    readFile(path: string): string | null;
     compile(): Promise<CompileResult>;
 }
 
@@ -61,6 +62,19 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
                     post({ kind: "compile-result", id: msg.id, error: String(error) });
                 }
             });
+            break;
+        }
+        case "read-file": {
+            const reply = async () => {
+                try {
+                    if (!bootPromise) throw new Error("read-file before init");
+                    await bootPromise;
+                    post({ kind: "file-content", id: msg.id, content: tsgoWasm.readFile(msg.path) });
+                } catch {
+                    post({ kind: "file-content", id: msg.id, content: null });
+                }
+            };
+            void reply();
             break;
         }
     }

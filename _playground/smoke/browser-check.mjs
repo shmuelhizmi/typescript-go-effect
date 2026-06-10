@@ -53,6 +53,43 @@ await page.waitForTimeout(6000);
 const runPane = await page.textContent(".tab-content");
 console.log(`\nRun pane (first 400 chars):\n${(runPane ?? "").slice(0, 400)}`);
 
+// Go to definition within main.ets: findUser usage -> its `effect` decl.
+await page.evaluate(() => {
+    const { editor, model } = window.__playground;
+    const usage = model.findMatches('findUser("42")', false, false, true, null, false)[0];
+    editor.setPosition({ lineNumber: usage.range.startLineNumber, column: usage.range.startColumn + 2 });
+    editor.focus();
+});
+await page.keyboard.press("F12");
+await page.waitForTimeout(1500);
+const inFile = await page.evaluate(() => {
+    const { editor, model } = window.__playground;
+    return {
+        uri: editor.getModel().uri.toString(),
+        line: editor.getPosition().lineNumber,
+        defLine: model.findMatches("effect findUser", false, false, true, null, false)[0]?.range.startLineNumber,
+    };
+});
+console.log(`\ngo-to-definition (same file): landed ${inFile.uri}:${inFile.line}, expected line ${inFile.defLine}`);
+
+// Go to definition across files: Effect.log -> effect d.ts (read-only model).
+await page.evaluate(() => {
+    const { editor, model } = window.__playground;
+    editor.setModel(model);
+    const usage = model.findMatches("Effect.log", false, false, true, null, false)[0];
+    editor.setPosition({ lineNumber: usage.range.startLineNumber, column: usage.range.endColumn - 1 });
+    editor.focus();
+});
+await page.keyboard.press("F12");
+await page.waitForTimeout(2500);
+const crossFile = await page.evaluate(() => {
+    const { editor } = window.__playground;
+    return { uri: editor.getModel().uri.toString() };
+});
+console.log(`go-to-definition (cross file): landed ${crossFile.uri}`);
+const fileBar = await page.textContent(".file-bar").catch(() => null);
+console.log(`file bar: ${fileBar}`);
+
 console.log("\nconsole output:");
 for (const line of consoleLines.slice(0, 40)) console.log("  " + line);
 

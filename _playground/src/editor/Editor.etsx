@@ -1,9 +1,12 @@
 // The Monaco editor pane: creates the editor once, pushes edits into
 // sourceAtom, and wires the LSP (diagnostics refresh trails edits).
+// Cross-file navigation (go to definition into effect's d.ts) swaps the
+// editor onto a read-only model; the file bar leads back to main.ets.
 import { useAtomSet } from "@effect-atom/atom-react"
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import { LspClient } from "../compiler/lsp-client"
 import { getWorkerClient } from "../compiler/worker-client"
+import { MAIN_URI } from "../compiler/protocol"
 import { initialSource } from "../examples"
 import { sourceAtom } from "../state/atoms"
 import { createPlaygroundEditor, connectLsp, type PlaygroundEditor } from "./setup"
@@ -12,12 +15,16 @@ import { createPlaygroundEditor, connectLsp, type PlaygroundEditor } from "./set
 let activeEditor: PlaygroundEditor | null = null
 
 export function setEditorText(text: string): void {
-  activeEditor?.setValue(text)
+  if (!activeEditor) return
+  // Examples/share always target the editable buffer.
+  activeEditor.editor.setModel(activeEditor.model)
+  activeEditor.setValue(text)
 }
 
 export function Editor() {
   const containerRef = useRef<HTMLDivElement>(null)
   const setSource = useAtomSet(sourceAtom)
+  const [viewedUri, setViewedUri] = useState(MAIN_URI)
 
   useEffect(() => {
     const container = containerRef.current
@@ -31,12 +38,22 @@ export function Editor() {
       refreshTimer = setTimeout(() => refresh?.(), 350)
     })
     activeEditor = playground
+    if (import.meta.env.DEV) {
+      // Handle for smoke/browser-check.mjs.
+      ;(window as { __playground?: unknown }).__playground = playground
+    }
+
+    const modelSubscription = playground.editor.onDidChangeModel(event => {
+      setViewedUri(event.newModelUrl?.toString() ?? MAIN_URI)
+    })
 
     const client = getWorkerClient(initialSource)
     let disposed = false
     void client.ready.then(() => {
       if (disposed) return
-      return connectLsp(new LspClient(client.lspPort), playground).then(connection => {
+      const lsp = new LspClient(client.lspPort)
+      const readFile = (path: string) => client.readFile(path)
+      return connectLsp(lsp, playground, readFile).then(connection => {
         refresh = connection.refreshDiagnostics
       })
     })
@@ -44,11 +61,35 @@ export function Editor() {
     return () => {
       disposed = true
       clearTimeout(refreshTimer)
+      modelSubscription.dispose()
       activeEditor = null
       playground.editor.dispose()
       playground.model.dispose()
     }
   }, [setSource])
 
-  return <div className="editor" ref={containerRef} />
+  const isMain = viewedUri === MAIN_URI
+  return (
+    <div className="editor-stack">
+      {!isMain ? (
+        <div className="file-bar">
+          <button
+            className="file-bar-back"
+            onClick={() => activeEditor?.editor.setModel(activeEditor.model)}
+          >
+            ‹ main.ets
+          </button>
+          <span className="file-bar-name">{prettyUri(viewedUri)} (read-only)</span>
+        </div>
+      ) : null}
+      <div className="editor" ref={containerRef} />
+    </div>
+  )
+}
+
+function prettyUri(uri: string): string {
+  return uri
+    .replace("file:///project/node_modules/", "")
+    .replace("file:///project/", "")
+    .replace("bundled:///libs/", "lib: ")
 }

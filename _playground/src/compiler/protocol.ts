@@ -30,13 +30,15 @@ export interface CompileResult {
 /** main thread -> worker (the LSP MessagePort is transferred with "init"). */
 export type WorkerRequest =
     | { kind: "init"; source: string }
-    | { kind: "compile"; id: number; source: string };
+    | { kind: "compile"; id: number; source: string }
+    | { kind: "read-file"; id: number; path: string };
 
 /** worker -> main thread. */
 export type WorkerResponse =
     | { kind: "ready" }
     | { kind: "fatal"; message: string }
-    | { kind: "compile-result"; id: number; result?: CompileResult; error?: string };
+    | { kind: "compile-result"; id: number; result?: CompileResult; error?: string }
+    | { kind: "file-content"; id: number; content: string | null };
 
 /** The in-wasm workspace; model URIs must match. */
 export const WORKSPACE_ROOT = "/project";

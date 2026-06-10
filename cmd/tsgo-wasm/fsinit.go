@@ -77,6 +77,21 @@ func jsInit(this js.Value, args []js.Value) any {
 	})
 }
 
+func jsReadFile(this js.Value, args []js.Value) any {
+	fs := currentFS()
+	if fs == nil {
+		return js.Null()
+	}
+	// Paths arrive as "/project/..." or "bundled:///libs/..." — the bundled
+	// wrapper dispatches on the scheme prefix, so pass them through verbatim.
+	path := args[0].String()
+	content, ok := fs.ReadFile(path)
+	if !ok {
+		return js.Null()
+	}
+	return content
+}
+
 func jsWriteFile(this js.Value, args []js.Value) any {
 	fs := currentFS()
 	if fs == nil {

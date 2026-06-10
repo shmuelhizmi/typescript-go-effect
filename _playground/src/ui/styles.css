@@ -105,8 +105,41 @@ body {
     border-right: 1px solid var(--border);
 }
 
-.editor {
+.editor-stack {
+    display: flex;
+    flex-direction: column;
     height: 100%;
+    width: 100%;
+}
+
+.file-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 8px;
+    background: var(--bg-header);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+}
+
+.file-bar-back {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--accent);
+    padding: 1px 8px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.file-bar-name {
+    color: var(--fg-dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.editor {
+    flex: 1;
+    min-height: 0;
     width: 100%;
 }
 

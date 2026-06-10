@@ -17,6 +17,8 @@
 //	  Feeds client->server LSP bytes (Content-Length framed).
 //	writeFile(path: string, content: string): string | null
 //	  Updates a file in the in-memory FS; returns an error message or null.
+//	readFile(path: string): string | null
+//	  Reads a file from the in-memory FS ("/project/..." or "bundled:///...").
 //	compile(): Promise<CompileResult>
 //	  Compiles /project/tsconfig.json and resolves with emitted files plus
 //	  config/syntactic diagnostics.
@@ -30,6 +32,7 @@ func main() {
 	api.Set("lspWrite", js.FuncOf(jsLspWrite))
 	api.Set("onLspMessage", js.FuncOf(jsOnLspMessage))
 	api.Set("writeFile", js.FuncOf(jsWriteFile))
+	api.Set("readFile", js.FuncOf(jsReadFile))
 	api.Set("compile", js.FuncOf(jsCompile))
 	js.Global().Set("tsgoWasm", api)
 	select {}
