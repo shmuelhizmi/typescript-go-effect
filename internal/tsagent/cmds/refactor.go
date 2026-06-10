@@ -75,7 +75,7 @@ func init() {
 			f := &refactorSafeDeleteFlags{}
 			registerRefactorTargetFlags(fs, &f.target)
 			registerRefactorTxFlags(fs, &f.tx)
-			fs.BoolVar(&f.cascade, "cascade", false, "also delete symbols that become dead (not implemented yet)")
+			fs.BoolVar(&f.cascade, "cascade", false, "also delete unexported top-level symbols that become dead as a result, recursively")
 			return f
 		},
 		Run: func(ctx context.Context, ws *core.Workspace, flags any, args []string) (any, error) {
@@ -318,10 +318,56 @@ type refactorSafeDeleteFlags struct {
 	cascade bool
 }
 
-func runRefactorSafeDelete(ctx context.Context, ws *core.Workspace, f *refactorSafeDeleteFlags, args []string) (*core.TxResult, error) {
-	if f.cascade {
-		return nil, cli.UsageErrorf("--cascade is not implemented yet")
+// refactorDeletionSpan is one node scheduled for deletion (widened via
+// refactorDeletionNode).
+type refactorDeletionSpan struct {
+	file *ast.SourceFile
+	node *ast.Node
+}
+
+// refactorSymbolSpans computes the deletion spans for a symbol's
+// declarations.
+func refactorSymbolSpans(symbol *ast.Symbol) []refactorDeletionSpan {
+	var spans []refactorDeletionSpan
+	seen := make(map[*ast.Node]bool)
+	for _, decl := range symbol.Declarations {
+		node := refactorDeletionNode(decl)
+		if seen[node] {
+			continue
+		}
+		seen[node] = true
+		spans = append(spans, refactorDeletionSpan{file: ast.GetSourceFileOfNode(node), node: node})
 	}
+	return spans
+}
+
+// refactorBlockingRefs returns the locations of references to refNode's
+// symbol that fall outside every span in spans (sorted, deduplicated).
+func refactorBlockingRefs(ctx context.Context, ws *core.Workspace, refNode *ast.Node, spans []refactorDeletionSpan) []string {
+	entries := ws.LS.GetReferencedSymbolsForNode(ctx, refNode.Pos(), refNode, ws.Program.GetSourceFiles())
+	var blocking []string
+	for _, entry := range entries {
+		for _, ref := range entry.References() {
+			node := ref.Node()
+			if node == nil {
+				blocking = append(blocking, "(reference without a resolvable location)")
+				continue
+			}
+			file := ast.GetSourceFileOfNode(node)
+			inside := slices.ContainsFunc(spans, func(s refactorDeletionSpan) bool {
+				return s.file == file && node.Pos() >= s.node.Pos() && node.End() <= s.node.End()
+			})
+			if !inside {
+				line, col := ws.PosToLineCol(file, astnav.GetStartOfNode(node, file, false /*includeJSDoc*/))
+				blocking = append(blocking, fmt.Sprintf("%s:%d:%d", ws.RelPath(file.FileName()), line, col))
+			}
+		}
+	}
+	slices.Sort(blocking)
+	return slices.Compact(blocking)
+}
+
+func runRefactorSafeDelete(ctx context.Context, ws *core.Workspace, f *refactorSafeDeleteFlags, args []string) (*core.TxResult, error) {
 	target, rest, err := resolveRefactorTarget(ctx, ws, &f.target, args)
 	if err != nil {
 		return nil, err
@@ -342,46 +388,17 @@ func runRefactorSafeDelete(ctx context.Context, ws *core.Workspace, f *refactorS
 
 	// Deletion nodes: the full declaration, widened to the enclosing
 	// variable statement for sole declarators.
-	type deletionSpan struct {
-		file *ast.SourceFile
-		node *ast.Node
-	}
-	var spans []deletionSpan
-	seen := make(map[*ast.Node]bool)
-	for _, decl := range symbol.Declarations {
-		node := refactorDeletionNode(decl)
-		if seen[node] {
-			continue
-		}
-		seen[node] = true
-		spans = append(spans, deletionSpan{file: ast.GetSourceFileOfNode(node), node: node})
-	}
+	spans := refactorSymbolSpans(symbol)
 
 	// References outside the declarations themselves block the deletion.
-	entries := ws.LS.GetReferencedSymbolsForNode(ctx, refNode.Pos(), refNode, ws.Program.GetSourceFiles())
-	var blocking []string
-	for _, entry := range entries {
-		for _, ref := range entry.References() {
-			node := ref.Node()
-			if node == nil {
-				blocking = append(blocking, "(reference without a resolvable location)")
-				continue
-			}
-			file := ast.GetSourceFileOfNode(node)
-			inside := slices.ContainsFunc(spans, func(s deletionSpan) bool {
-				return s.file == file && node.Pos() >= s.node.Pos() && node.End() <= s.node.End()
-			})
-			if !inside {
-				line, col := ws.PosToLineCol(file, astnav.GetStartOfNode(node, file, false /*includeJSDoc*/))
-				blocking = append(blocking, fmt.Sprintf("%s:%d:%d", ws.RelPath(file.FileName()), line, col))
-			}
-		}
-	}
-	if len(blocking) > 0 {
-		slices.Sort(blocking)
-		blocking = slices.Compact(blocking)
+	if blocking := refactorBlockingRefs(ctx, ws, refNode, spans); len(blocking) > 0 {
 		return nil, cli.RefusedErrorf("cannot safe-delete %q: %d blocking reference(s):\n  %s",
 			symbolName, len(blocking), strings.Join(blocking, "\n  "))
+	}
+
+	notes := []string{"imports that become unused after the deletion are not removed (run refactor organize-imports)"}
+	if f.cascade {
+		spans, notes = refactorCascadeSpans(ctx, ws, symbolName, spans, notes)
 	}
 
 	var es core.EditSet
@@ -392,8 +409,100 @@ func runRefactorSafeDelete(ctx context.Context, ws *core.Workspace, f *refactorS
 			Edits:    []icore.TextChange{{TextRange: deletionRange, NewText: ""}},
 		})
 	}
-	notes := []string{"imports that become unused after the deletion are not removed (run refactor organize-imports)"}
 	return finishRefactorTx(ctx, ws, es, &f.tx, notes)
+}
+
+// refactorCascadeSpans grows the deletion set to a fixpoint: symbols that the
+// deleted declarations referenced and that have no remaining references
+// outside the deletion set are deleted too, when they are unexported
+// top-level declarations of project files. Capped at 10 rounds.
+func refactorCascadeSpans(ctx context.Context, ws *core.Workspace, rootName string, spans []refactorDeletionSpan, notes []string) ([]refactorDeletionSpan, []string) {
+	const maxRounds = 10
+	inSet := make(map[*ast.Node]bool)
+	parentOf := make(map[*ast.Node]string) // deletion node -> name of the symbol whose deletion freed it
+	nameOf := make(map[*ast.Node]string)
+	for _, s := range spans {
+		inSet[s.node] = true
+		nameOf[s.node] = rootName
+	}
+	frontier := slices.Clone(spans)
+
+	for round := 0; round < maxRounds && len(frontier) > 0; round++ {
+		var next []refactorDeletionSpan
+		for _, span := range frontier {
+			checker, done := ws.Program.GetTypeCheckerForFile(ctx, span.file)
+			for _, id := range refactorCollectIdentifiers(span.node) {
+				sym := checker.GetSymbolAtLocation(id)
+				if sym == nil || len(sym.Declarations) == 0 {
+					continue
+				}
+				// Only unexported top-level declarations of project files are
+				// cascade candidates; imports are left to organize-imports.
+				candidate := refactorDeletionNode(sym.Declarations[0])
+				if inSet[candidate] {
+					continue
+				}
+				if !refactorCascadeEligible(ws, sym) {
+					continue
+				}
+				nameNode := ast.GetNameOfDeclaration(sym.Declarations[0])
+				if nameNode == nil {
+					continue
+				}
+				candSpans := refactorSymbolSpans(sym)
+				if len(refactorBlockingRefs(ctx, ws, nameNode, append(slices.Clone(spans), candSpans...))) > 0 {
+					continue
+				}
+				for _, cs := range candSpans {
+					if inSet[cs.node] {
+						continue
+					}
+					inSet[cs.node] = true
+					parentOf[cs.node] = nameOf[span.node]
+					nameOf[cs.node] = nameNode.Text()
+					spans = append(spans, cs)
+					next = append(next, cs)
+				}
+			}
+			done()
+		}
+		frontier = next
+	}
+	if len(frontier) > 0 {
+		notes = append(notes, fmt.Sprintf("cascade stopped after %d rounds; more symbols may have become dead", maxRounds))
+	}
+	for _, s := range spans {
+		if parent, ok := parentOf[s.node]; ok {
+			notes = append(notes, fmt.Sprintf("cascade: %s (%s) became dead after deleting %s",
+				nameOf[s.node], refactorNodeLineCol(ws, s.node), parent))
+		}
+	}
+	return spans, notes
+}
+
+// refactorCascadeEligible reports whether a symbol may be swept up by
+// --cascade: declared (only) at the top level of project source files, with
+// no export modifier on any declaration, and not an import binding.
+func refactorCascadeEligible(ws *core.Workspace, sym *ast.Symbol) bool {
+	for _, decl := range sym.Declarations {
+		if !refactorIsProjectSourceNode(ws, decl) {
+			return false
+		}
+		switch decl.Kind {
+		case ast.KindImportSpecifier, ast.KindImportClause, ast.KindNamespaceImport,
+			ast.KindParameter, ast.KindTypeParameter, ast.KindBindingElement:
+			return false
+		}
+		widened := refactorDeletionNode(decl)
+		if widened.Parent == nil || widened.Parent.Kind != ast.KindSourceFile {
+			return false
+		}
+		if widened.ModifierFlags()&ast.ModifierFlagsExport != 0 ||
+			decl.ModifierFlags()&ast.ModifierFlagsExport != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // refactorDeletionNode widens a declaration to the node that should actually

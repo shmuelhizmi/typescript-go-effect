@@ -398,3 +398,317 @@ func TestTypeInstantiations(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// type explain-error
+
+const explainSource = `export interface Inner {
+	value: number;
+}
+
+export interface Outer {
+	name: string;
+	inner: Inner;
+}
+
+export const candidate = {
+	name: "x",
+	inner: { value: "bad" },
+};
+
+export const o: Outer = candidate;
+`
+
+func TestTypeExplainErrorNestedAssignability(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{"/project/src/err.ts": explainSource})
+	ctx := context.Background()
+
+	// Position form: the error is reported on `o` (line 15, col 14).
+	result, err := runTypeExplainError(ctx, ws, &explainErrorFlags{}, []string{"src/err.ts:15:14"})
+	if err != nil {
+		t.Fatalf("runTypeExplainError(position): %v", err)
+	}
+	if result.Diagnostic == nil || result.Diagnostic.Code != "TS2322" {
+		t.Fatalf("diagnostic = %+v, want TS2322", result.Diagnostic)
+	}
+	if result.Diagnostic.DiagRef == "" {
+		t.Error("diagnostic should carry a diagRef")
+	}
+
+	// Message chain decomposition: nested causes at depth >= 1.
+	if len(result.Chain) < 2 {
+		t.Fatalf("chain = %+v, want root plus at least one nested cause", result.Chain)
+	}
+	if result.Chain[0].Depth != 0 || result.Chain[0].Code != "TS2322" {
+		t.Errorf("chain root = %+v, want depth 0 code TS2322", result.Chain[0])
+	}
+	maxDepth := 0
+	for _, entry := range result.Chain {
+		maxDepth = max(maxDepth, entry.Depth)
+	}
+	if maxDepth < 1 {
+		t.Errorf("chain max depth = %d, want >= 1 (nested causes)", maxDepth)
+	}
+
+	// Drill-down names the mismatched property path inner -> value.
+	if result.Drilldown == nil {
+		t.Fatal("expected an assignability drilldown for TS2322")
+	}
+	if result.Drilldown.Target != "Outer" {
+		t.Errorf("drilldown target = %q, want Outer", result.Drilldown.Target)
+	}
+	var inner *AssignabilityProblem
+	for _, p := range result.Drilldown.Problems {
+		if p.Property == "inner" {
+			inner = p
+		}
+	}
+	if inner == nil {
+		t.Fatalf("drilldown problems = %+v, want property inner", result.Drilldown.Problems)
+	}
+	if len(inner.Nested) != 1 || inner.Nested[0].Property != "value" ||
+		inner.Nested[0].Expected != "number" || inner.Nested[0].Actual != "string" {
+		t.Errorf("nested problems = %+v, want value: expected number, got string", inner.Nested)
+	}
+}
+
+func TestTypeExplainErrorDiagRefRoundTrip(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{"/project/src/err.ts": explainSource})
+	ctx := context.Background()
+
+	// Run check and feed its diagRef back into explain-error.
+	checkResult, err := runCheck(ctx, ws, &checkFlags{code: "TS2322"}, nil)
+	if err != nil {
+		t.Fatalf("runCheck: %v", err)
+	}
+	if len(checkResult.Diagnostics) == 0 {
+		t.Fatal("expected a TS2322 diagnostic from check")
+	}
+	diagRef := checkResult.Diagnostics[0].DiagRef
+
+	result, err := runTypeExplainError(ctx, ws, &explainErrorFlags{}, []string{diagRef})
+	if err != nil {
+		t.Fatalf("runTypeExplainError(%s): %v", diagRef, err)
+	}
+	if result.Diagnostic.DiagRef != diagRef {
+		t.Errorf("round-trip diagRef = %q, want %q", result.Diagnostic.DiagRef, diagRef)
+	}
+	if result.Diagnostic.Message != checkResult.Diagnostics[0].Message {
+		t.Errorf("message mismatch: %q vs %q", result.Diagnostic.Message, checkResult.Diagnostics[0].Message)
+	}
+	if result.Drilldown == nil {
+		t.Error("expected drilldown via diagRef form too")
+	}
+}
+
+func TestTypeExplainErrorNotFound(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{"/project/src/err.ts": explainSource})
+	if _, err := runTypeExplainError(context.Background(), ws, &explainErrorFlags{}, []string{"src/err.ts:1:1"}); err == nil {
+		t.Error("expected not-found error for a clean position")
+	}
+	if _, err := runTypeExplainError(context.Background(), ws, &explainErrorFlags{}, []string{"src/err.ts:9999:TS2322"}); err == nil {
+		t.Error("expected not-found error for a stale diagRef")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// type flow
+
+const flowSource = `export function f(x: string | undefined): string {
+	if (x) {
+		return x;
+	}
+	return "";
+}
+`
+
+func TestTypeFlowNarrowing(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{"/project/src/flow.ts": flowSource})
+
+	// `x` parameter declaration at line 1, col 19.
+	result, err := runTypeFlow(context.Background(), ws, &flowFlags{}, []string{"src/flow.ts:1:19"})
+	if err != nil {
+		t.Fatalf("runTypeFlow: %v", err)
+	}
+	if result.DeclaredType != "string | undefined" {
+		t.Errorf("declared type = %q, want string | undefined", result.DeclaredType)
+	}
+	if len(result.Rows) < 3 {
+		t.Fatalf("rows = %+v, want declaration + 2 references", result.Rows)
+	}
+	if !result.Rows[0].Declaration || result.Rows[0].Type != "string | undefined" {
+		t.Errorf("first row = %+v, want declaration row with declared type", result.Rows[0])
+	}
+
+	// Inside `if (x) { return x; }` the reference must be narrowed to string.
+	var narrowed *FlowRow
+	for _, row := range result.Rows {
+		if row.Context == "return x;" {
+			narrowed = row
+		}
+	}
+	if narrowed == nil {
+		t.Fatalf("no row for `return x;`: %+v", result.Rows)
+	}
+	if narrowed.Type != "string" {
+		t.Errorf("narrowed type = %q, want string (flow narrowing via GetTypeAtLocation)", narrowed.Type)
+	}
+	if narrowed.NarrowedFrom != "string | undefined" {
+		t.Errorf("narrowedFrom = %q, want string | undefined", narrowed.NarrowedFrom)
+	}
+	if result.Note != "" {
+		t.Errorf("note should be empty when narrowing is observed, got %q", result.Note)
+	}
+
+	// The condition reference `if (x)` is not narrowed yet.
+	var condition *FlowRow
+	for _, row := range result.Rows {
+		if row.Context == "if (x) {" {
+			condition = row
+		}
+	}
+	if condition == nil || condition.Type != "string | undefined" {
+		t.Errorf("condition row = %+v, want unnarrowed string | undefined", condition)
+	}
+}
+
+func TestTypeFlowRejectsNonVariable(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{"/project/src/flow.ts": flowSource})
+	// `f` is a function, not a variable.
+	if _, err := runTypeFlow(context.Background(), ws, &flowFlags{}, []string{"src/flow.ts:1:17"}); err == nil {
+		t.Error("expected usage error for a function target")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// type infer
+
+const inferSource = `export function title() {
+	return "t";
+}
+
+export function double(n) {
+	return n * 2;
+}
+
+export function pick(v) {
+	return v;
+}
+
+double(1);
+double(2);
+pick(3);
+pick("x");
+`
+
+func TestTypeInfer(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{"/project/src/infer.ts": inferSource})
+	result, err := runTypeInfer(context.Background(), ws, &inferFlags{}, []string{"src/infer.ts"})
+	if err != nil {
+		t.Fatalf("runTypeInfer: %v", err)
+	}
+	byTarget := make(map[string]*InferSuggestion)
+	for _, s := range result.Suggestions {
+		byTarget[s.Kind+" "+s.Target] = s
+	}
+
+	// (a) Unannotated return of a string literal suggests string.
+	title := byTarget["return title"]
+	if title == nil {
+		t.Fatalf("no return suggestion for title: %+v", result.Suggestions)
+	}
+	if title.Suggested != "string" || title.Confidence != "high" || title.Current != "none" {
+		t.Errorf("title suggestion = %+v, want string/high/none", title)
+	}
+
+	// (b) Param called twice with numbers: high-confidence number.
+	n := byTarget["param n"]
+	if n == nil {
+		t.Fatalf("no param suggestion for n: %+v", result.Suggestions)
+	}
+	if n.Suggested != "number" || n.Confidence != "high" || n.Current != "implicit-any" {
+		t.Errorf("n suggestion = %+v, want number/high/implicit-any", n)
+	}
+
+	// Param called with number and string: medium-confidence union.
+	v := byTarget["param v"]
+	if v == nil {
+		t.Fatalf("no param suggestion for v: %+v", result.Suggestions)
+	}
+	if v.Suggested != "number | string" && v.Suggested != "string | number" {
+		t.Errorf("v suggestion = %q, want a number/string union", v.Suggested)
+	}
+	if v.Confidence != "medium" {
+		t.Errorf("v confidence = %q, want medium", v.Confidence)
+	}
+}
+
+func TestTypeInferFixPlanAppliesCleanly(t *testing.T) {
+	t.Parallel()
+	source := inferSource
+	ws := newTestWorkspace(t, map[string]any{"/project/src/infer.ts": source})
+	result, err := runTypeInfer(context.Background(), ws, &inferFlags{fixPlan: true}, []string{"src/infer.ts"})
+	if err != nil {
+		t.Fatalf("runTypeInfer: %v", err)
+	}
+	if result.FixPlan == nil || len(result.FixPlan.Edits) != 1 {
+		t.Fatalf("fix plan = %+v, want edits for one file", result.FixPlan)
+	}
+	fileEdits := result.FixPlan.Edits[0]
+	if fileEdits.File != "src/infer.ts" {
+		t.Fatalf("fix plan file = %q", fileEdits.File)
+	}
+
+	// Apply the byte-offset insertions back-to-front (the documented
+	// apply-edits schema: pos/end byte offsets, newText).
+	text := source
+	for i := len(fileEdits.Edits) - 1; i >= 0; i-- {
+		edit := fileEdits.Edits[i]
+		if edit.Pos != edit.End {
+			t.Fatalf("annotation edit should be a pure insertion, got %+v", edit)
+		}
+		if edit.Pos < 0 || edit.Pos > len(text) {
+			t.Fatalf("edit out of bounds: %+v", edit)
+		}
+		text = text[:edit.Pos] + edit.NewText + text[edit.Pos:]
+	}
+	for _, want := range []string{
+		"export function title(): string {",
+		"export function double(n: number): number {",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("patched text missing %q:\n%s", want, text)
+		}
+	}
+	if !strings.Contains(text, "pick(v: number | string)") && !strings.Contains(text, "pick(v: string | number)") {
+		t.Errorf("patched text missing union annotation for v:\n%s", text)
+	}
+
+	// The patched file must type-check without the implicit-any errors.
+	wsPatched := newTestWorkspace(t, map[string]any{"/project/src/infer.ts": text})
+	checkResult, err := runCheck(context.Background(), wsPatched, &checkFlags{code: "TS7006"}, nil)
+	if err != nil {
+		t.Fatalf("runCheck(patched): %v", err)
+	}
+	if len(checkResult.Diagnostics) != 0 {
+		t.Errorf("patched file still has implicit-any diagnostics: %+v", checkResult.Diagnostics)
+	}
+}
+
+func TestTypeInferSymbolMode(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{"/project/src/infer.ts": inferSource})
+	result, err := runTypeInfer(context.Background(), ws, &inferFlags{symbol: "src/infer.ts#pick"}, nil)
+	if err != nil {
+		t.Fatalf("runTypeInfer(--symbol): %v", err)
+	}
+	if len(result.Suggestions) != 1 || result.Suggestions[0].Target != "v" {
+		t.Errorf("symbol mode suggestions = %+v, want only param v", result.Suggestions)
+	}
+}

@@ -186,13 +186,68 @@ func TestRefactorSafeDeleteSoleVariableDeclarator(t *testing.T) {
 	}
 }
 
-func TestRefactorSafeDeleteCascadeNotImplemented(t *testing.T) {
+func TestRefactorSafeDeleteCascadeDeletesNewlyDeadChain(t *testing.T) {
 	t.Parallel()
-	ws := newTestWorkspace(t, map[string]any{"/project/src/a.ts": "export const x = 1;\n"})
-	f := &refactorSafeDeleteFlags{target: refactorTargetFlags{name: "x"}, cascade: true}
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "function helperA(): number {\n\treturn helperB();\n}\nfunction helperB(): number {\n\treturn 1;\n}\nexport function entry(): number {\n\treturn helperA();\n}\nexport const keep = 1;\n",
+	})
+	f := &refactorSafeDeleteFlags{
+		target:  refactorTargetFlags{name: "entry"},
+		tx:      refactorTxFlags{apply: true},
+		cascade: true,
+	}
+	result, err := runRefactorSafeDelete(context.Background(), ws, f, nil)
+	if err != nil {
+		t.Fatalf("runRefactorSafeDelete --cascade: %v", err)
+	}
+	if !result.Applied || len(result.NewErrors) != 0 {
+		t.Fatalf("result = %+v, want clean apply", result)
+	}
+	if got := readWorkspaceFile(t, ws, "/project/src/a.ts"); got != "export const keep = 1;\n" {
+		t.Errorf("a.ts after cascade = %q", got)
+	}
+	// The cascade tree is reported in the notes.
+	all := strings.Join(result.Notes, "\n")
+	if !strings.Contains(all, "cascade: helperA") || !strings.Contains(all, "cascade: helperB") {
+		t.Errorf("notes should describe the cascade tree, got: %q", all)
+	}
+	if !strings.Contains(all, "became dead after deleting entry") || !strings.Contains(all, "became dead after deleting helperA") {
+		t.Errorf("notes should attribute each cascade deletion, got: %q", all)
+	}
+}
+
+func TestRefactorSafeDeleteCascadeStopsAtExportedSymbols(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export function helper(): number {\n\treturn 1;\n}\nexport function entry(): number {\n\treturn helper();\n}\n",
+	})
+	f := &refactorSafeDeleteFlags{
+		target:  refactorTargetFlags{name: "entry"},
+		tx:      refactorTxFlags{apply: true},
+		cascade: true,
+	}
+	result, err := runRefactorSafeDelete(context.Background(), ws, f, nil)
+	if err != nil {
+		t.Fatalf("runRefactorSafeDelete --cascade: %v", err)
+	}
+	if !result.Applied {
+		t.Fatalf("result = %+v, want applied", result)
+	}
+	got := readWorkspaceFile(t, ws, "/project/src/a.ts")
+	if !strings.Contains(got, "export function helper") || strings.Contains(got, "entry") {
+		t.Errorf("exported helper must survive the cascade: %q", got)
+	}
+}
+
+func TestRefactorSafeDeleteCascadeStillRefusesReferencedRoot(t *testing.T) {
+	t.Parallel()
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/a.ts": "export function used(): number {\n\treturn 1;\n}\nexport const v = used();\n",
+	})
+	f := &refactorSafeDeleteFlags{target: refactorTargetFlags{name: "used"}, cascade: true}
 	_, err := runRefactorSafeDelete(context.Background(), ws, f, nil)
-	if err == nil || cli.ExitCode(err) != cli.ExitUsage {
-		t.Errorf("expected a usage error for --cascade, got %v", err)
+	if err == nil || cli.ExitCode(err) != cli.ExitRefused {
+		t.Errorf("expected a refusal, got %v", err)
 	}
 }
 

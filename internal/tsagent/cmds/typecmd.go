@@ -395,12 +395,18 @@ func drillAssignability(c *checker.Checker, source *checker.Type, target *checke
 		if c.IsTypeAssignableTo(actualType, expectedType) {
 			continue
 		}
-		problems = append(problems, &AssignabilityProblem{
+		problem := &AssignabilityProblem{
 			Property: targetProp.Name,
 			Expected: c.TypeToStringEx(expectedType, nil, core.TypeDisplayFlags, nil),
 			Actual:   c.TypeToStringEx(actualType, nil, core.TypeDisplayFlags, nil),
-			Nested:   drillAssignability(c, actualType, expectedType, depth+1),
-		})
+		}
+		// Only drill into object-to-object mismatches; recursing into
+		// primitive mismatches would list the apparent members of the
+		// primitive (toFixed, valueOf, …) as noise.
+		if actualType.Flags()&checker.TypeFlagsObject != 0 && expectedType.Flags()&checker.TypeFlagsObject != 0 {
+			problem.Nested = drillAssignability(c, actualType, expectedType, depth+1)
+		}
+		problems = append(problems, problem)
 	}
 	return problems
 }
