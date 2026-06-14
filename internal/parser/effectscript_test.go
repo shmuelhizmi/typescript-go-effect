@@ -144,6 +144,55 @@ layer D: Tag provide [A] { return 3 }
 	}
 }
 
+func TestEffectScriptInlineLayerExpression(t *testing.T) {
+	t.Parallel()
+	file := parseETS(t, `
+const live = layer Greeter {
+  return { greeting: "hi" }
+}
+const cfg = layer Config ({ url: "x" })
+main() |> Effect.provide(layer Greeter { return {} })
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0)
+	stmts := file.Statements.Nodes
+	assert.Equal(t, stmts[0].Kind, ast.KindImportDeclaration)
+
+	// const live = Layer.effect(Greeter, Effect.gen(function* () { ... }))
+	live := stmts[1].AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes[0].AsVariableDeclaration().Initializer
+	assert.Equal(t, live.Kind, ast.KindCallExpression)
+	effectAccess := live.AsCallExpression().Expression.AsPropertyAccessExpression()
+	assert.Equal(t, effectAccess.Expression.Text(), "Layer")
+	assert.Equal(t, effectAccess.Name().Text(), "effect")
+	liveArgs := live.AsCallExpression().Arguments.Nodes
+	assert.Equal(t, liveArgs[0].Text(), "Greeter")
+	assert.Equal(t, liveArgs[1].Kind, ast.KindCallExpression) // Effect.gen(...)
+
+	// const cfg = Layer.succeed(Config, { url: "x" })
+	cfg := stmts[2].AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes[0].AsVariableDeclaration().Initializer
+	assert.Equal(t, cfg.Kind, ast.KindCallExpression)
+	cfgAccess := cfg.AsCallExpression().Expression.AsPropertyAccessExpression()
+	assert.Equal(t, cfgAccess.Expression.Text(), "Layer")
+	assert.Equal(t, cfgAccess.Name().Text(), "succeed")
+	cfgArgs := cfg.AsCallExpression().Arguments.Nodes
+	assert.Equal(t, cfgArgs[0].Text(), "Config")
+	assert.Equal(t, cfgArgs[1].Kind, ast.KindObjectLiteralExpression)
+}
+
+func TestEffectScriptLayerStillCallableIdentifier(t *testing.T) {
+	t.Parallel()
+	// 'layer' as a plain identifier (variable, call) must keep working: only
+	// `layer Ident (`/`layer Ident {` is the inline form.
+	file := parseETS(t, `
+const layer = (tag: unknown) => tag;
+const x = layer(1);
+const y = layer;
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0)
+	for _, s := range file.Statements.Nodes {
+		assert.Assert(t, s.Kind != ast.KindImportDeclaration, "no helper import for plain TS")
+	}
+}
+
 func TestEffectScriptConcurrencyAndDefer(t *testing.T) {
 	t.Parallel()
 	file := parseETS(t, `

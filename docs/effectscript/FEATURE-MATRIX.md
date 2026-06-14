@@ -24,6 +24,7 @@ How every major area of the `effect` library is expressed in EffectScript.
 | Layers (scoped) | `Layer.scoped` | `scoped layer L: Tag { }` | ✅ syntax |
 | Layers (value) | `Layer.succeed` | `layer L: Tag = expr` | ✅ syntax |
 | Layer composition | `Layer.provide` | `layer … provide [A, B]` | ✅ syntax |
+| Layers (inline) | `Layer.effect`/`succeed` | `layer Tag { }` / `layer Tag (v)` | ✅ syntax |
 | Providing at edge | `Effect.provide` | `program \|> Effect.provide(L)` | ✅ idiom (`\|>`) |
 | Pipelines | `pipe(...)` | `\|>` operator | ✅ syntax |
 | Fork fibers | `Effect.fork` | `fork e` | ✅ syntax |

@@ -33,3 +33,15 @@ layer CacheTest: Cache = { get: () => undefined }
 layer Wired: Database provide [CacheTest] {
   return (<- PgPool)
 }
+
+declare const program: any;
+
+// inline (expression-position) layers: unnamed Layer values (SPEC §7.2)
+const InlineEffect = layer Database {
+  pool <- PgPool
+  return { query: (sql: string) => pool.query(sql), url: cfg.dbUrl }
+}
+
+const InlineSucceed = layer Cache ({ get: () => undefined })
+
+program |> Effect.provide(layer Cache ({ get: () => "x" }))

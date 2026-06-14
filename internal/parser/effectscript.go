@@ -159,6 +159,24 @@ func (p *Parser) nextIsScopedLayerDeclarationStart() bool {
 	return p.nextIsLayerDeclarationStart()
 }
 
+// layer Tag { ... } / layer Tag ( value ) in expression position. The tag may
+// be dotted (pkg.Tag). A ':' after the name is the *named declaration* form
+// (handled at statement level), so the inline form requires '(' or '{'.
+func (p *Parser) nextIsInlineLayerStart() bool {
+	p.nextToken() // past 'layer'
+	if p.token != ast.KindIdentifier || p.hasPrecedingLineBreak() {
+		return false
+	}
+	p.nextToken()
+	for p.token == ast.KindDotToken {
+		if p.nextToken() != ast.KindIdentifier {
+			return false
+		}
+		p.nextToken()
+	}
+	return p.token == ast.KindOpenParenToken || p.token == ast.KindOpenBraceToken
+}
+
 func (p *Parser) nextIsDeferBodyStart() bool {
 	switch p.nextToken() {
 	case ast.KindOpenBraceToken:
@@ -760,6 +778,31 @@ func (p *Parser) parseLayerDeclaration(pos int, modifiers *ast.ModifierList, sco
 	return p.finishNodeWithEnd(p.factory.NewVariableStatement(modifiers, declList), pos, end)
 }
 
+// layer Tag { body }   ==>  Layer.effect(Tag, Effect.gen(function* () { body }))
+// layer Tag ( value )  ==>  Layer.succeed(Tag, value)
+//
+// The inline (expression-position) layer: an unnamed Layer value usable
+// anywhere an expression is, e.g. Effect.provide(layer Tag { ... }). The named
+// declaration form (layer Name: Tag ...) is distinguished by the ':' after the
+// name and is parsed at statement level.
+func (p *Parser) parseInlineLayerExpression() *ast.Expression {
+	pos := p.nodePos()
+	p.nextToken() // consume 'layer'
+	tag := p.parseEntityNameExpression()
+	if p.token == ast.KindOpenParenToken {
+		p.nextToken()
+		value := p.parseAssignmentExpressionOrHigher()
+		p.parseExpected(ast.KindCloseParenToken)
+		end := p.nodePos()
+		return p.makeHelperCall("Layer", "succeed", []*ast.Node{tag, value}, pos, end)
+	}
+	body := p.parseEffectFunctionBlock()
+	end := p.nodePos()
+	emptyParams := p.newNodeList(core.NewTextRange(-1, -1), nil)
+	gen := p.makeEffectCall("gen", []*ast.Node{p.makeGeneratorExpression(emptyParams, body, pos, end)}, pos, end)
+	return p.makeHelperCall("Layer", "effect", []*ast.Node{tag, gen}, pos, end)
+}
+
 // parseEntityNameExpression parses a dotted name (Db / pkg.Db) as an
 // expression, for positions where a service tag is referenced as a value.
 func (p *Parser) parseEntityNameExpression() *ast.Expression {
@@ -895,6 +938,10 @@ func (p *Parser) tryParseEffectScriptExpression() *ast.Expression {
 	case "match":
 		if p.lookAhead((*Parser).nextIsMatchExpressionStart) {
 			return p.parseMatchExpression()
+		}
+	case "layer":
+		if p.lookAhead((*Parser).nextIsInlineLayerStart) {
+			return p.parseInlineLayerExpression()
 		}
 	case "fork":
 		if p.inEffectBody && p.lookAhead((*Parser).nextIsUnaryOperandStart) {

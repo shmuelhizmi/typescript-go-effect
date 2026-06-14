@@ -157,6 +157,13 @@ Both outputs are normative-equivalent.)
   const L = Layer.effect(S, Effect.gen(function* () { body' })).pipe(Layer.provide([⟦A⟧, ⟦B⟧]));
 ```
 
+Inline (expression-position) layers — unnamed `Layer` values (SPEC §7.2):
+
+```
+⟦ layer S { body } ⟧   = Layer.effect(S, Effect.gen(function* () { body' }))
+⟦ layer S (e) ⟧        = Layer.succeed(S, ⟦e⟧)
+```
+
 ## 7. Resources
 
 ```

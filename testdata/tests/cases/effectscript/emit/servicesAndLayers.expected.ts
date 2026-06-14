@@ -32,3 +32,11 @@ const CacheTest = Layer.succeed(Cache, { get: () => undefined });
 const Wired = Layer.effect(Database, Effect.gen(function* () {
     return (yield* PgPool);
 })).pipe(Layer.provide([CacheTest]));
+declare const program: any;
+// inline (expression-position) layers: unnamed Layer values (SPEC §7.2)
+const InlineEffect = Layer.effect(Database, Effect.gen(function* () {
+    const pool = yield* PgPool;
+    return { query: (sql: string) => pool.query(sql), url: cfg.dbUrl };
+}));
+const InlineSucceed = Layer.succeed(Cache, { get: () => undefined });
+Effect.provide(Layer.succeed(Cache, { get: () => "x" }))(program);

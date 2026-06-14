@@ -77,7 +77,10 @@ positions defined below (like `async`, `satisfies`, `accessor`). Look-ahead rule
 * `service`, `layer`, `schema` are keywords at declaration position when followed
   by an identifier (same scheme as `type`, `namespace`); `schema` additionally
   requires `{` after the name. `tagged` is a keyword only in the exact sequence
-  `tagged error Name {`; `error` only as its second word.
+  `tagged error Name {`; `error` only as its second word. `layer` is *additionally*
+  a keyword at expression position in the shapes `layer Tag {` / `layer Tag (`
+  (the inline layer, §7.2) — distinguished from the named declaration by the
+  absence of the `:` (and from a `layer(...)` call by the leading tag identifier).
 * `raises`, `requires` are keywords only inside an effect-signature return clause
   (§3.2). `release` only after the operand of a `using`-bind (§8). `scoped` only as
   a modifier of `layer`/`effect`. `provide` only as an infix clause of `layer`
@@ -324,6 +327,24 @@ Modifiers and clauses:
 
 \* `provide` lists dependency layers baked into this layer:
 `const X = Layer.effect(Tag, ...).pipe(Layer.provide([A, B]))`.
+
+**Inline layers.** A `layer` is also usable in expression position as an
+unnamed `Layer` value — no `: ` and no name binding, distinguished from the
+declaration by what follows the tag:
+
+| Form | Desugaring |
+| --- | --- |
+| `layer Tag { body }` | `Layer.effect(Tag, Effect.gen(...))` |
+| `layer Tag (value)` | `Layer.succeed(Tag, value)` |
+
+```ts
+program |> Effect.provide(layer Greeter { return { greeting: "hi" } })
+const cfg = layer Config ({ url: "..." })
+```
+
+The block body is an effect body; the parenthesized form takes any value
+expression. A plain `layer(...)` call (the tag identifier is absent) keeps its
+ordinary meaning.
 
 ### 7.3 Providing at the edge
 
