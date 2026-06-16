@@ -242,6 +242,91 @@ effect work() {
 	assert.Equal(t, len(file.Diagnostics()), 0)
 }
 
+// effectBodyStatements returns the statements of the generator body that an
+// `effect name() { ... }` declaration lowers to (after the injected import).
+func effectBodyStatements(t *testing.T, file *ast.SourceFile) []*ast.Node {
+	t.Helper()
+	stmts := file.Statements.Nodes
+	decl := stmts[len(stmts)-1]
+	v := decl.AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes[0].AsVariableDeclaration()
+	gen := v.Initializer.AsCallExpression().Arguments.Nodes[0]
+	return gen.AsFunctionExpression().Body.AsBlock().Statements.Nodes
+}
+
+func bindDeclaration(t *testing.T, stmt *ast.Node) *ast.VariableDeclaration {
+	t.Helper()
+	return stmt.AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes[0].AsVariableDeclaration()
+}
+
+// The reported ASI bug: an expression statement (`user.length`) must NOT absorb
+// the following `[a, b] <- e` as element access — they are two statements.
+func TestEffectScriptExprThenDestructuringBind(t *testing.T) {
+	t.Parallel()
+	file := parseETS(t, `
+effect m(user: string) {
+  user.length
+  [a, b] <- pair()
+  return a + b
+}
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0)
+	body := effectBodyStatements(t, file)
+	assert.Equal(t, len(body), 3) // expr stmt, destructuring bind, return
+	assert.Equal(t, body[0].Kind, ast.KindExpressionStatement)
+	assert.Equal(t, body[0].AsExpressionStatement().Expression.Kind, ast.KindPropertyAccessExpression)
+	assert.Equal(t, body[1].Kind, ast.KindVariableStatement)
+	bd := bindDeclaration(t, body[1])
+	assert.Equal(t, bd.Name().Kind, ast.KindArrayBindingPattern)
+	assert.Equal(t, bd.Initializer.Kind, ast.KindYieldExpression)
+	assert.Equal(t, body[2].Kind, ast.KindReturnStatement)
+}
+
+// The guard must be precise: with no `<-` following, `arr` <newline> `[0]` stays
+// a single element-access expression (not split into two statements).
+func TestEffectScriptElementAccessAcrossNewlineStillWorks(t *testing.T) {
+	t.Parallel()
+	file := parseETS(t, `
+effect m(arr: number[]) {
+  const first = arr
+  [0]
+  return first
+}
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0)
+	body := effectBodyStatements(t, file)
+	assert.Equal(t, len(body), 2) // const first = arr[0];  return first;
+	first := bindDeclaration(t, body[0])
+	assert.Equal(t, first.Initializer.Kind, ast.KindElementAccessExpression)
+}
+
+// Sibling forms whose leading token cannot continue the prior expression are
+// already separated correctly; pin them so they never regress.
+func TestEffectScriptExprThenDiscardObjectIdentifierBinds(t *testing.T) {
+	t.Parallel()
+	file := parseETS(t, `
+effect m(user: string) {
+  user.length
+  <- log(user)
+  user.length
+  { x } <- obj()
+  user.length
+  y <- val()
+  return x + y
+}
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0)
+	body := effectBodyStatements(t, file)
+	assert.Equal(t, len(body), 7) // expr, discard, expr, objbind, expr, idbind, return
+
+	// discard bind: yield* log(user)
+	assert.Equal(t, body[1].Kind, ast.KindExpressionStatement)
+	assert.Equal(t, body[1].AsExpressionStatement().Expression.Kind, ast.KindYieldExpression)
+	// object destructuring bind
+	assert.Equal(t, bindDeclaration(t, body[3]).Name().Kind, ast.KindObjectBindingPattern)
+	// identifier bind
+	assert.Equal(t, bindDeclaration(t, body[5]).Name().Kind, ast.KindIdentifier)
+}
+
 func TestEffectScriptPostfixCatch(t *testing.T) {
 	t.Parallel()
 	file := parseETS(t, `

@@ -5405,6 +5405,15 @@ func (p *Parser) parseMemberExpressionRest(pos int, expression *ast.Expression, 
 			expression = p.parsePropertyAccessExpressionRest(pos, expression, questionDotToken)
 			continue
 		}
+		// In an effect body, `expr` <newline> `[a, b] <- e` is a destructuring
+		// bind statement, not element access on `expr`. Stop the member-rest loop
+		// so ASI ends the expression and the bind is recognized at statement level
+		// (parseStatement -> tryParseEffectScriptStatement).
+		if questionDotToken == nil && p.token == ast.KindOpenBracketToken &&
+			p.isEffectScript() && p.inEffectBody && p.hasPrecedingLineBreak() &&
+			p.lookAhead((*Parser).nextIsBindingPatternBind) {
+			return expression
+		}
 		// when in the [Decorator] context, we do not parse ElementAccess as it could be part of a ComputedPropertyName
 		if (questionDotToken != nil || !p.inDecoratorContext()) && p.parseOptional(ast.KindOpenBracketToken) {
 			expression = p.parseElementAccessExpressionRest(pos, expression, questionDotToken)
