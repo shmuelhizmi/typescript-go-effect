@@ -568,17 +568,19 @@ func (p *Parser) makeGeneratorExpression(parameters *ast.NodeList, body *ast.Nod
 	return p.finishNodeWithEnd(p.factory.NewFunctionExpression(nil, asterisk, nil, nil, parameters, nil, nil, body), pos, end)
 }
 
-// effectHelperImportOrder fixes the specifier order of the synthesized import.
+// effectHelperImportOrder fixes the order of the synthesized imports.
 var effectHelperImportOrder = []string{"Effect", "Layer", "Context", "Fiber", "Match", "Data", "Schema"}
 
-// injectEffectScriptImports prepends `import { Effect, Layer, ... } from
-// "effect";` for every helper namespace the lowering referenced that the user
-// has not bound via a top-level import already.
+// injectEffectScriptImports prepends one `import * as <Helper> from
+// "effect/<Helper>";` per helper namespace the lowering referenced that the
+// user has not bound via a top-level import already. Per-namespace subpath
+// imports (rather than a single barrel `import { … } from "effect"`) keep the
+// generated output tree-shakeable.
 func (p *Parser) injectEffectScriptImports(statements []*ast.Node) []*ast.Node {
 	if len(p.effectHelpersUsed) == 0 {
 		return statements
 	}
-	var specs []*ast.Node
+	var imports []*ast.Node
 	for _, helper := range effectHelperImportOrder {
 		if _, used := p.effectHelpersUsed[helper]; !used {
 			continue
@@ -586,17 +588,17 @@ func (p *Parser) injectEffectScriptImports(statements []*ast.Node) []*ast.Node {
 		if p.hasTopLevelImportOf(statements, helper) {
 			continue
 		}
-		specName := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier(helper)))
-		specs = append(specs, p.finishSynthesized(p.factory.NewImportSpecifier(false /*isTypeOnly*/, nil, specName)))
+		nsName := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier(helper)))
+		namespace := p.finishSynthesized(p.factory.NewNamespaceImport(nsName))
+		clause := p.finishSynthesized(p.factory.NewImportClause(ast.KindUnknown, nil, namespace))
+		module := p.finishSynthesized(p.factory.NewStringLiteral("effect/"+helper, ast.TokenFlagsNone))
+		imp := p.finishNodeWithEnd(p.factory.NewImportDeclaration(nil, clause, module, nil), 0, 0)
+		imports = append(imports, imp)
 	}
-	if len(specs) == 0 {
+	if len(imports) == 0 {
 		return statements
 	}
-	named := p.finishSynthesized(p.factory.NewNamedImports(p.newNodeList(core.NewTextRange(-1, -1), specs)))
-	clause := p.finishSynthesized(p.factory.NewImportClause(ast.KindUnknown, nil, named))
-	module := p.finishSynthesized(p.factory.NewStringLiteral("effect", ast.TokenFlagsNone))
-	imp := p.finishNodeWithEnd(p.factory.NewImportDeclaration(nil, clause, module, nil), 0, 0)
-	return append([]*ast.Node{imp}, statements...)
+	return append(imports, statements...)
 }
 
 func (p *Parser) hasTopLevelImportOf(statements []*ast.Node, name string) bool {

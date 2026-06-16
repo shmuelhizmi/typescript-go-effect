@@ -1,5 +1,7 @@
 // tagged error / schema declarations (SPEC §5.1, §7.4; TRANSPILATION §1.4, §1.5)
-import { Effect, Data, Schema } from "effect";
+import * as Effect from "effect/Effect";
+import * as Data from "effect/Data";
+import * as Schema from "effect/Schema";
 class NotFound extends Data.TaggedError("NotFound")<{
     id: string;
 }> {

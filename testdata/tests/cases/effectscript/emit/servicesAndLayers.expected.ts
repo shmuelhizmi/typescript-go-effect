@@ -1,5 +1,7 @@
 // service + layer declarations (SPEC §7, TRANSPILATION §5–6)
-import { Effect, Layer, Context } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Context from "effect/Context";
 declare const cfg: {
     dbUrl: string;
 };

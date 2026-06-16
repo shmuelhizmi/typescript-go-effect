@@ -1,5 +1,5 @@
 // `A raises E requires R` type sugar (SPEC §3.2, GRAMMAR §5)
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 declare class Boom {
     readonly _tag: "Boom";
 }

@@ -1,5 +1,5 @@
 // bind forms (SPEC §4, TRANSPILATION §2) — binds are bare and immutable
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 declare const ea: any, eb: any, ec: any;
 const binds = Effect.fn("binds")(function* () {
     const a = yield* ea;

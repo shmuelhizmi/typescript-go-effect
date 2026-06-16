@@ -1,5 +1,6 @@
 // fork/join/par/race + using/defer (SPEC §8–9, TRANSPILATION §7–8)
-import { Effect, Fiber } from "effect";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 declare const ea: any, eb: any, ec: any;
 declare const Watchdog: any;
 const concurrency = Effect.fn("concurrency")(function* () {

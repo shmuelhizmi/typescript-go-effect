@@ -1,5 +1,5 @@
 // raise + postfix catch arms (SPEC §5–6, TRANSPILATION §3–4)
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 import { Data } from "effect";
 class NotFound extends Data.TaggedError("NotFound")<{
     id: string;

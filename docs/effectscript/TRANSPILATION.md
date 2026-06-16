@@ -265,14 +265,16 @@ annotation. For plain `: T` annotations, `satisfies (…) => T`.
 
 ## 12. Auto-import synthesis
 
-After desugaring a file, for each referenced helper namespace not already imported:
+After desugaring a file, for each referenced helper namespace not already imported,
+one tree-shakeable subpath namespace import is synthesized:
 
 ```ts
-import { Effect } from "effect";          // and/or Layer, Context, Fiber, Match, Data, Schema, pipe
+import * as Effect from "effect/Effect";  // and/or Layer, Context, Fiber, Match, Data, Schema
 ```
 
-with `"effect"` replaced by `effectImportSource`. Synthesized specifiers merge into
-one import declaration. A user import of e.g. `Effect` from anywhere suppresses
+with `"effect"` replaced by `effectImportSource` (so the subpath is
+`<effectImportSource>/<Namespace>`). One declaration is emitted per referenced
+namespace, in a fixed order. A user import of e.g. `Effect` from anywhere suppresses
 synthesis for that name (their binding wins — same as classic JSX factory lookup).
 A non-import user binding that shadows a needed helper name (e.g. a local
 `const Fiber = …` in a file using `join`) collides with the synthesized import and

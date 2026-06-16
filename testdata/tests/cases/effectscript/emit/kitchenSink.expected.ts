@@ -1,4 +1,9 @@
-import { Effect, Layer, Context, Fiber, Match, Data } from "effect";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Context from "effect/Context";
+import * as Fiber from "effect/Fiber";
+import * as Match from "effect/Match";
+import * as Data from "effect/Data";
 class NotFound extends Data.TaggedError("NotFound")<{
     id: string;
 }> {

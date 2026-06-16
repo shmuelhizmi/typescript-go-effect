@@ -20,6 +20,17 @@ func parseETS(t *testing.T, sourceText string) *ast.SourceFile {
 	return parser.ParseSourceFile(opts, sourceText, core.ScriptKindETS)
 }
 
+// nonImports returns the statements after the synthesized leading
+// `import * as <Helper> from "effect/<Helper>"` declarations. The desugarer now
+// emits one per referenced namespace, so tests skip a variable-length prefix.
+func nonImports(stmts []*ast.Node) []*ast.Node {
+	i := 0
+	for i < len(stmts) && stmts[i].Kind == ast.KindImportDeclaration {
+		i++
+	}
+	return stmts[i:]
+}
+
 func TestEffectScriptDeclarationLowering(t *testing.T) {
 	t.Parallel()
 	file := parseETS(t, `
@@ -139,7 +150,7 @@ layer D: Tag provide [A] { return 3 }
 	assert.Equal(t, len(file.Diagnostics()), 0)
 	stmts := file.Statements.Nodes
 	assert.Equal(t, stmts[0].Kind, ast.KindImportDeclaration)
-	for _, s := range stmts[1:] {
+	for _, s := range nonImports(stmts) {
 		assert.Equal(t, s.Kind, ast.KindVariableStatement)
 	}
 }
@@ -156,9 +167,10 @@ main() |> Effect.provide(layer Greeter { return {} })
 	assert.Equal(t, len(file.Diagnostics()), 0)
 	stmts := file.Statements.Nodes
 	assert.Equal(t, stmts[0].Kind, ast.KindImportDeclaration)
+	body := nonImports(stmts)
 
 	// const live = Layer.effect(Greeter, Effect.gen(function* () { ... }))
-	live := stmts[1].AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes[0].AsVariableDeclaration().Initializer
+	live := body[0].AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes[0].AsVariableDeclaration().Initializer
 	assert.Equal(t, live.Kind, ast.KindCallExpression)
 	effectAccess := live.AsCallExpression().Expression.AsPropertyAccessExpression()
 	assert.Equal(t, effectAccess.Expression.Text(), "Layer")
@@ -168,7 +180,7 @@ main() |> Effect.provide(layer Greeter { return {} })
 	assert.Equal(t, liveArgs[1].Kind, ast.KindCallExpression) // Effect.gen(...)
 
 	// const cfg = Layer.succeed(Config, { url: "x" })
-	cfg := stmts[2].AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes[0].AsVariableDeclaration().Initializer
+	cfg := body[1].AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes[0].AsVariableDeclaration().Initializer
 	assert.Equal(t, cfg.Kind, ast.KindCallExpression)
 	cfgAccess := cfg.AsCallExpression().Expression.AsPropertyAccessExpression()
 	assert.Equal(t, cfgAccess.Expression.Text(), "Layer")

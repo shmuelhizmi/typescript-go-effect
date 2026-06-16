@@ -1,5 +1,5 @@
 // |> pipeline (SPEC §10; TRANSPILATION §9)
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 declare const program: any;
 declare const MainLive: any;
 declare const double: (n: number) => number;

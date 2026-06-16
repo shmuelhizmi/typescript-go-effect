@@ -37,10 +37,13 @@ delta. Anything not mentioned here behaves exactly as in TypeScript.
 ### 1.2 Auto-import
 
 The desugarer references the namespaces `Effect`, `Layer`, `Context`, `Scope`,
-`Fiber`, `Match`, and the function `pipe`. For each one actually used by the desugared output
-of a file, a namespace/named import from `effectImportSource` is synthesized unless
-the file already imports that name (in which case the user's binding is used — same
-rule as the classic-runtime JSX factory).
+`Fiber`, `Match`, `Data`, `Schema`, and the function `pipe`. For each one
+actually used by the desugared output of a file, a per-namespace subpath import
+`import * as <Namespace> from "<effectImportSource>/<Namespace>";` is synthesized
+unless the file already binds that name (in which case the user's binding is used
+— same rule as the classic-runtime JSX factory). The subpath form (rather than a
+single barrel `import { … } from "<effectImportSource>"`) keeps the generated
+output tree-shakeable.
 
 ---
 

@@ -1,5 +1,6 @@
 // match expressions: value mode + tag mode (SPEC §11, TRANSPILATION §10)
-import { Effect, Match } from "effect";
+import * as Effect from "effect/Effect";
+import * as Match from "effect/Match";
 import { Data } from "effect";
 class NotFound extends Data.TaggedError("NotFound")<{
     id: string;

@@ -1,5 +1,5 @@
 // .etsx: JSX + EffectScript in one file (SPEC §12)
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 declare const useEffectRunner: () => (e: any) => void;
 declare const purchase: (item: string) => any;
 declare namespace JSX {

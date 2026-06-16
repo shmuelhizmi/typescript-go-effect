@@ -5,7 +5,7 @@
 //
 // Note: tagged-template (`expr` ⏎ `` `t` ``) and call (`f()` ⏎ `(x)`) absorption
 // are *standard JS ASI* and intentionally inherited — not exercised here.
-import { Effect } from "effect";
+import * as Effect from "effect/Effect";
 declare const arr: number[];
 declare function findUser(id: string): string;
 declare function greet(name: string): string;
