@@ -269,7 +269,7 @@ assert(writeError === null, `writeFile error: ${writeError}`);
 const compiled = await tsgo.compile();
 assert(Array.isArray(compiled.files) && compiled.files.length === 1, "one emitted file");
 assert(compiled.files[0].name === "/project/main.js", "emitted next to source");
-assert(compiled.files[0].text.includes(`from "effect"`), "emitted JS imports effect");
+assert(compiled.files[0].text.includes(`from "effect/Effect"`), "emitted JS imports the tree-shakeable effect/Effect subpath");
 assert(compiled.files[0].text.includes("user#"), "compile sees the edited text");
 assert(compiled.diagnostics.length === 0, `no diagnostics, got ${JSON.stringify(compiled.diagnostics)}`);
 log(`compile in ${ms(tCompile)} (${compiled.files[0].text.length} chars of JS)`);
