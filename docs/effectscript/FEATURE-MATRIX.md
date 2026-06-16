@@ -49,7 +49,7 @@ How every major area of the `effect` library is expressed in EffectScript.
 | Pattern matching (tags) | `Match.tag` / `Match.tags` | `match tag (x) { Tag >> … }` | ✅ syntax |
 | Match exhaustiveness | `Match.exhaustive` / `orElse` | no `_` arm → exhaustive; `_` arm → fallback | ✅ syntax |
 | Streams | `Stream.*` | binds + `\|>`; comprehensions | 🔮 future |
-| STM | `STM.gen` | `atomic { }` | 🔮 future |
+| STM | `STM.gen` | `atomic { }` / `atomic name() {}` | ✅ syntax |
 | Schema | `Schema.Class` | `schema S { name: Schema.String }` | ✅ syntax |
 
 **Design test applied throughout:** a feature only gets dedicated syntax when the

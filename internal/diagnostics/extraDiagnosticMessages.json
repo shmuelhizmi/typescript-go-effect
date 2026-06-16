@@ -139,6 +139,10 @@
         "category": "Error",
         "code": 18120
     },
+    "'{0}' is not allowed inside an 'atomic' block.": {
+        "category": "Error",
+        "code": 18121
+    },
     "Catch arms can only be attached to an expression inside an effect body.": {
         "category": "Error",
         "code": 18113

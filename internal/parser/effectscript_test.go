@@ -190,6 +190,77 @@ main() |> Effect.provide(layer Greeter { return {} })
 	assert.Equal(t, cfgArgs[1].Kind, ast.KindObjectLiteralExpression)
 }
 
+func TestEffectScriptAtomicBlockExpression(t *testing.T) {
+	t.Parallel()
+	file := parseETS(t, `
+const tx = atomic {
+  v <- TRef.get(ref)
+  if (v < 0) raise new Error("neg")
+  return v
+}
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0)
+	body := nonImports(file.Statements.Nodes)
+
+	// const tx = STM.gen(function* () { ... })
+	init := body[0].AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes[0].AsVariableDeclaration().Initializer
+	assert.Equal(t, init.Kind, ast.KindCallExpression)
+	access := init.AsCallExpression().Expression.AsPropertyAccessExpression()
+	assert.Equal(t, access.Expression.Text(), "STM")
+	assert.Equal(t, access.Name().Text(), "gen")
+
+	// raise inside atomic lowers to STM.fail, not Effect.fail.
+	gen := init.AsCallExpression().Arguments.Nodes[0]
+	stmts := gen.AsFunctionExpression().Body.AsBlock().Statements.Nodes
+	ret := stmts[1].AsIfStatement().ThenStatement.AsReturnStatement().Expression // return yield* STM.fail(...)
+	failCall := ret.AsYieldExpression().Expression
+	failAccess := failCall.AsCallExpression().Expression.AsPropertyAccessExpression()
+	assert.Equal(t, failAccess.Expression.Text(), "STM")
+	assert.Equal(t, failAccess.Name().Text(), "fail")
+}
+
+func TestEffectScriptAtomicDeclaration(t *testing.T) {
+	t.Parallel()
+	file := parseETS(t, `
+atomic transfer(n: number): number {
+  v <- TRef.get(ref)
+  return v + n
+}
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0)
+	body := nonImports(file.Statements.Nodes)
+
+	// const transfer = (n: number) => STM.gen(function* () { ... })
+	decl := body[0]
+	assert.Equal(t, decl.Kind, ast.KindVariableStatement)
+	v := decl.AsVariableStatement().DeclarationList.AsVariableDeclarationList().Declarations.Nodes[0].AsVariableDeclaration()
+	assert.Equal(t, v.Name().Text(), "transfer")
+	arrow := v.Initializer
+	assert.Equal(t, arrow.Kind, ast.KindArrowFunction)
+	// The params live on the arrow; the inner generator is param-less.
+	assert.Equal(t, len(arrow.AsArrowFunction().Parameters.Nodes), 1)
+	genCall := arrow.AsArrowFunction().Body
+	assert.Equal(t, genCall.Kind, ast.KindCallExpression)
+	access := genCall.AsCallExpression().Expression.AsPropertyAccessExpression()
+	assert.Equal(t, access.Expression.Text(), "STM")
+	assert.Equal(t, access.Name().Text(), "gen")
+}
+
+func TestEffectScriptAtomicStillCallableIdentifier(t *testing.T) {
+	t.Parallel()
+	// 'atomic' as a plain identifier must keep working: only `atomic Ident (`
+	// and `atomic {` are the keyword forms.
+	file := parseETS(t, `
+const atomic = (x: unknown) => x;
+const a = atomic(1);
+const b = atomic;
+`)
+	assert.Equal(t, len(file.Diagnostics()), 0)
+	for _, s := range file.Statements.Nodes {
+		assert.Assert(t, s.Kind != ast.KindImportDeclaration, "no helper import for plain TS")
+	}
+}
+
 func TestEffectScriptLayerStillCallableIdentifier(t *testing.T) {
 	t.Parallel()
 	// 'layer' as a plain identifier (variable, call) must keep working: only
@@ -492,6 +563,19 @@ func TestEffectScriptDiagnostics(t *testing.T) {
 
 	raiseOutside := parseETS(t, "function f() {\n  raise new Error(\"x\")\n}\n")
 	assert.DeepEqual(t, codes(raiseOutside), []int32{18101})
+
+	// Concurrency / resource forms are illegal inside an atomic (STM) block.
+	forkInAtomic := parseETS(t, "const t = atomic {\n  f <- fork ea\n  return f\n}\n")
+	assert.DeepEqual(t, codes(forkInAtomic), []int32{18121})
+
+	deferInAtomic := parseETS(t, "const t = atomic {\n  defer { <- cleanup() }\n  return 1\n}\n")
+	assert.DeepEqual(t, codes(deferInAtomic), []int32{18121})
+
+	usingInAtomic := parseETS(t, "const t = atomic {\n  using r <- acquire()\n  return r\n}\n")
+	assert.DeepEqual(t, codes(usingInAtomic), []int32{18121})
+
+	parInAtomic := parseETS(t, "const t = atomic {\n  xs <- par [ea, eb]\n  return xs\n}\n")
+	assert.DeepEqual(t, codes(parInAtomic), []int32{18121})
 
 	unreachableArm := parseETS(t, `
 const m = match (v) {

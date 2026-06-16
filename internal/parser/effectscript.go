@@ -30,6 +30,10 @@ func (p *Parser) tryParseEffectScriptStatement() *ast.Statement {
 			if p.lookAhead((*Parser).nextIsEffectDeclarationStart) {
 				return p.parseEffectDeclaration(p.nodePos(), nil /*modifiers*/)
 			}
+		case "atomic":
+			if p.lookAhead((*Parser).nextIsAtomicDeclarationStart) {
+				return p.parseAtomicDeclaration(p.nodePos(), nil /*modifiers*/)
+			}
 		case "service":
 			if p.lookAhead((*Parser).nextIsServiceDeclarationStart) {
 				return p.parseServiceDeclaration(p.nodePos(), nil /*modifiers*/)
@@ -59,6 +63,9 @@ func (p *Parser) tryParseEffectScriptStatement() *ast.Statement {
 			}
 		case "defer":
 			if p.inEffectBody && p.lookAhead((*Parser).nextIsDeferBodyStart) {
+				if p.inAtomicBody {
+					p.disallowInAtomic("defer")
+				}
 				return p.parseDeferStatement()
 			}
 		}
@@ -70,6 +77,9 @@ func (p *Parser) tryParseEffectScriptStatement() *ast.Statement {
 		}
 	case ast.KindDeferKeyword:
 		if p.inEffectBody && p.lookAhead((*Parser).nextIsDeferBodyStart) {
+			if p.inAtomicBody {
+				p.disallowInAtomic("defer")
+			}
 			return p.parseDeferStatement()
 		}
 	case ast.KindOpenBracketToken, ast.KindOpenBraceToken:
@@ -205,6 +215,10 @@ func (p *Parser) tryParseEffectScriptDeclaration(pos int, modifiers *ast.Modifie
 		if p.lookAhead((*Parser).nextIsEffectDeclarationStart) {
 			return p.parseEffectDeclaration(pos, modifiers)
 		}
+	case "atomic":
+		if p.lookAhead((*Parser).nextIsAtomicDeclarationStart) {
+			return p.parseAtomicDeclaration(pos, modifiers)
+		}
 	case "service":
 		if p.lookAhead((*Parser).nextIsServiceDeclarationStart) {
 			return p.parseServiceDeclaration(pos, modifiers)
@@ -239,6 +253,8 @@ func (p *Parser) scanStartOfEffectScriptDeclaration() bool {
 	switch p.scanner.TokenValue() {
 	case "effect":
 		return p.nextIsEffectDeclarationStart()
+	case "atomic":
+		return p.nextIsAtomicDeclarationStart()
 	case "service":
 		return p.nextIsServiceDeclarationStart()
 	case "tagged":
@@ -261,6 +277,23 @@ func (p *Parser) nextIsEffectDeclarationStart() bool {
 	}
 	p.nextToken()
 	return p.token == ast.KindOpenParenToken
+}
+
+// atomic name( — the declaration form. `atomic {` (no name) is the block
+// expression, handled at expression position.
+func (p *Parser) nextIsAtomicDeclarationStart() bool {
+	p.nextToken()
+	if p.token != ast.KindIdentifier || p.hasPrecedingLineBreak() {
+		return false
+	}
+	p.nextToken()
+	return p.token == ast.KindOpenParenToken
+}
+
+// atomic { — the block-expression form (no name between 'atomic' and '{').
+func (p *Parser) nextIsAtomicBlockStart() bool {
+	p.nextToken()
+	return !p.hasPrecedingLineBreak() && p.token == ast.KindOpenBraceToken
 }
 
 func (p *Parser) nextIsRaiseOperandStart() bool {
@@ -359,8 +392,8 @@ func (p *Parser) parseDiscardBindStatement() *ast.Statement {
 	return p.finishNodeWithEnd(p.factory.NewExpressionStatement(yieldExpr), pos, end)
 }
 
-// raise e;       ==>   return yield* Effect.fail(e);
-// raise.die e;   ==>   return yield* Effect.die(e);
+// raise e;       ==>   return yield* Effect.fail(e);   (STM.fail inside atomic)
+// raise.die e;   ==>   return yield* Effect.die(e);    (STM.die inside atomic)
 func (p *Parser) parseRaiseStatement() *ast.Statement {
 	pos := p.nodePos()
 	p.nextToken() // consume 'raise'
@@ -375,9 +408,33 @@ func (p *Parser) parseRaiseStatement() *ast.Statement {
 	p.parseSemicolon()
 	end := p.nodePos()
 
-	call := p.makeEffectCall(method, []*ast.Node{operand}, pos, end)
+	call := p.makeHelperCall(p.raiseHelper(), method, []*ast.Node{operand}, pos, end)
 	yieldExpr := p.makeYieldStar(call, operandPos, end)
 	return p.finishNodeWithEnd(p.factory.NewReturnStatement(yieldExpr), pos, end)
+}
+
+// dropEffectDecorators reports decorators on an effect/atomic declaration as
+// errors (EffectScript applies combinators with |> instead) and returns the
+// modifier list with them removed; non-decorator modifiers (export, ...) stay.
+func (p *Parser) dropEffectDecorators(modifiers *ast.ModifierList) *ast.ModifierList {
+	if modifiers == nil {
+		return nil
+	}
+	var kept []*ast.Node
+	for _, m := range modifiers.Nodes {
+		if ast.IsDecorator(m) {
+			p.parseErrorAtRange(m.Loc, diagnostics.Decorators_are_not_valid_here)
+		} else {
+			kept = append(kept, m)
+		}
+	}
+	if len(kept) == len(modifiers.Nodes) {
+		return modifiers
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return p.newModifierList(modifiers.Loc, kept)
 }
 
 // effect name(params)[: T] { body }
@@ -394,27 +451,7 @@ func (p *Parser) parseEffectDeclaration(pos int, modifiers *ast.ModifierList) *a
 	body := p.parseEffectFunctionBlock()
 	end := p.nodePos()
 
-	// Decorators are not part of EffectScript: combinators are applied with
-	// the |> pipeline instead. Report and drop them; non-decorator modifiers
-	// (export, ...) stay on the emitted variable statement.
-	keptModifiers := modifiers
-	if modifiers != nil {
-		var kept []*ast.Node
-		for _, m := range modifiers.Nodes {
-			if ast.IsDecorator(m) {
-				p.parseErrorAtRange(m.Loc, diagnostics.Decorators_are_not_valid_here)
-			} else {
-				kept = append(kept, m)
-			}
-		}
-		if len(kept) < len(modifiers.Nodes) {
-			if len(kept) == 0 {
-				keptModifiers = nil
-			} else {
-				keptModifiers = p.newModifierList(modifiers.Loc, kept)
-			}
-		}
-	}
+	keptModifiers := p.dropEffectDecorators(modifiers)
 
 	funcExpr := p.makeGeneratorExpression(parameters, body, pos, end)
 	fn := p.makeEffectCall("fn", []*ast.Node{p.makeStringLiteral(nameText, pos)}, pos, end)
@@ -452,6 +489,45 @@ func (p *Parser) parseEffectBlockExpression() *ast.Expression {
 	return p.makeEffectCall("gen", []*ast.Node{funcExpr}, pos, end)
 }
 
+// atomic { body }   ==>   STM.gen(function* () { body })
+func (p *Parser) parseAtomicBlockExpression() *ast.Expression {
+	pos := p.nodePos()
+	p.nextToken() // consume 'atomic'
+	body := p.parseAtomicFunctionBlock()
+	end := p.nodePos()
+
+	emptyParams := p.newNodeList(core.NewTextRange(pos, pos), nil)
+	funcExpr := p.makeGeneratorExpression(emptyParams, body, pos, end)
+	return p.makeHelperCall("STM", "gen", []*ast.Node{funcExpr}, pos, end)
+}
+
+// atomic name(params)[: T] { body }
+//
+//	==>  const name = (params) => STM.gen(function* () { body });
+//
+// STM has no traced-fn equivalent of Effect.fn, so the declaration lowers to a
+// plain arrow returning an STM.gen transaction.
+func (p *Parser) parseAtomicDeclaration(pos int, modifiers *ast.ModifierList) *ast.Statement {
+	p.nextToken() // consume 'atomic'
+	name := p.parseIdentifier()
+	parameters := p.parseParameters(ParseFlagsYield)
+	// The annotation describes the resulting STM effect, not the generator; it
+	// is parsed and dropped here.
+	p.parseReturnType(ast.KindColonToken, false /*isType*/)
+	body := p.parseAtomicFunctionBlock()
+	end := p.nodePos()
+
+	keptModifiers := p.dropEffectDecorators(modifiers)
+
+	emptyParams := p.newNodeList(core.NewTextRange(pos, pos), nil)
+	gen := p.makeHelperCall("STM", "gen", []*ast.Node{p.makeGeneratorExpression(emptyParams, body, pos, end)}, pos, end)
+	arrowToken := p.finishSynthesized(p.factory.NewToken(ast.KindEqualsGreaterThanToken))
+	arrow := p.finishNodeWithEnd(p.factory.NewArrowFunction(nil, nil, parameters, nil, nil, arrowToken, gen), pos, end)
+	decl := p.finishNodeWithEnd(p.factory.NewVariableDeclaration(name, nil, nil, arrow), pos, end)
+	declList := p.finishNodeWithEnd(p.factory.NewVariableDeclarationList(p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{decl}), ast.NodeFlagsConst), pos, end)
+	return p.finishNodeWithEnd(p.factory.NewVariableStatement(keptModifiers, declList), pos, end)
+}
+
 // (<- e)   ==>   (yield* e)   [hooked from parseParenthesizedExpression]
 func (p *Parser) parseBindParenExpression() *ast.Expression {
 	pos := p.nodePos()
@@ -470,10 +546,26 @@ func (p *Parser) parseBindParenExpression() *ast.Expression {
 // forms are enabled. Mirrors parseFunctionBlock, which by contrast *clears*
 // inEffectBody for ordinary nested functions.
 func (p *Parser) parseEffectFunctionBlock() *ast.Node {
+	return p.parseBodyBlock(false /*atomic*/)
+}
+
+// parseAtomicFunctionBlock parses an `atomic { }` body: like an effect body but
+// raises lower to STM and the concurrency/resource forms are disallowed.
+func (p *Parser) parseAtomicFunctionBlock() *ast.Node {
+	return p.parseBodyBlock(true /*atomic*/)
+}
+
+// parseBodyBlock is the shared implementation for effect and atomic bodies. It
+// sets inAtomicBody to match the construct (false for effect, true for atomic)
+// so a nested effect{} inside atomic{} — and vice versa — correctly reflects
+// the innermost body kind, which selects Effect.* vs STM.* in raise lowering.
+func (p *Parser) parseBodyBlock(atomic bool) *ast.Node {
 	saveContextFlags := p.contextFlags
 	saveHasAwaitIdentifier := p.statementHasAwaitIdentifier
 	saveInEffectBody := p.inEffectBody
+	saveInAtomicBody := p.inAtomicBody
 	p.inEffectBody = true
+	p.inAtomicBody = atomic
 	p.setContextFlags(ast.NodeFlagsYieldContext, true)
 	p.setContextFlags(ast.NodeFlagsAwaitContext, false)
 	p.setContextFlags(ast.NodeFlagsDecoratorContext, false)
@@ -481,6 +573,7 @@ func (p *Parser) parseEffectFunctionBlock() *ast.Node {
 	p.contextFlags = saveContextFlags
 	p.statementHasAwaitIdentifier = saveHasAwaitIdentifier
 	p.inEffectBody = saveInEffectBody
+	p.inAtomicBody = saveInAtomicBody
 	return block
 }
 
@@ -507,6 +600,15 @@ func (p *Parser) makeYieldStar(operand *ast.Expression, pos int, end int) *ast.E
 // import is needed.
 func (p *Parser) makeEffectCall(method string, args []*ast.Node, pos int, end int) *ast.Expression {
 	return p.makeHelperCall("Effect", method, args, pos, end)
+}
+
+// raiseHelper is "STM" inside an atomic body and "Effect" otherwise, so `raise`
+// lowers to the transactional failure channel within `atomic { }`.
+func (p *Parser) raiseHelper() string {
+	if p.inAtomicBody {
+		return "STM"
+	}
+	return "Effect"
 }
 
 // makeHelperCall builds <helper>.<method>(args...) for one of the auto-imported
@@ -569,7 +671,7 @@ func (p *Parser) makeGeneratorExpression(parameters *ast.NodeList, body *ast.Nod
 }
 
 // effectHelperImportOrder fixes the order of the synthesized imports.
-var effectHelperImportOrder = []string{"Effect", "Layer", "Context", "Fiber", "Match", "Data", "Schema"}
+var effectHelperImportOrder = []string{"Effect", "Layer", "Context", "Fiber", "Match", "STM", "Data", "Schema"}
 
 // injectEffectScriptImports prepends one `import * as <Helper> from
 // "effect/<Helper>";` per helper namespace the lowering referenced that the
@@ -849,6 +951,7 @@ func (p *Parser) parseDeferStatement() *ast.Statement {
 }
 
 // raise e (expression)  ==>  (yield* Effect.fail(e)), which has type never
+// (STM.fail inside atomic)
 func (p *Parser) parseRaiseExpression() *ast.Expression {
 	pos := p.nodePos()
 	p.nextToken() // consume 'raise'
@@ -860,7 +963,7 @@ func (p *Parser) parseRaiseExpression() *ast.Expression {
 	}
 	operand := p.parseSimpleUnaryExpression()
 	end := p.nodePos()
-	call := p.makeEffectCall(method, []*ast.Node{operand}, pos, end)
+	call := p.makeHelperCall(p.raiseHelper(), method, []*ast.Node{operand}, pos, end)
 	yieldExpr := p.makeYieldStar(call, pos, end)
 	return p.finishNodeWithEnd(p.factory.NewParenthesizedExpression(yieldExpr), pos, end)
 }
@@ -914,8 +1017,15 @@ func (p *Parser) parseRaceExpression() *ast.Expression {
 	return p.makeEffectCall("raceAll", []*ast.Node{array}, pos, end)
 }
 
+// disallowInAtomic reports a keyword as illegal inside an `atomic { }` block
+// (STM has no concurrency or resource operations). The caller still parses the
+// construct afterwards so the rest of the body recovers cleanly.
+func (p *Parser) disallowInAtomic(keyword string) {
+	p.parseErrorAt(p.nodePos(), p.nodePos()+len(keyword), diagnostics.X_0_is_not_allowed_inside_an_atomic_block, keyword)
+}
+
 // tryParseEffectScriptExpression is the primary-expression hook for keyword-led
-// effect expressions ('effect {', 'fork', 'join', 'par', 'race').
+// effect expressions ('effect {', 'atomic {', 'fork', 'join', 'par', 'race').
 func (p *Parser) tryParseEffectScriptExpression() *ast.Expression {
 	if p.token != ast.KindIdentifier {
 		return nil
@@ -933,6 +1043,10 @@ func (p *Parser) tryParseEffectScriptExpression() *ast.Expression {
 			// effect entry() {...}): the name becomes the tracing span only.
 			return p.parseNamedEffectFnExpression()
 		}
+	case "atomic":
+		if p.lookAhead((*Parser).nextIsAtomicBlockStart) {
+			return p.parseAtomicBlockExpression()
+		}
 	case "raise":
 		if p.inEffectBody && p.lookAhead((*Parser).nextIsRaiseOperandStart) {
 			return p.parseRaiseExpression()
@@ -947,18 +1061,30 @@ func (p *Parser) tryParseEffectScriptExpression() *ast.Expression {
 		}
 	case "fork":
 		if p.inEffectBody && p.lookAhead((*Parser).nextIsUnaryOperandStart) {
+			if p.inAtomicBody {
+				p.disallowInAtomic("fork")
+			}
 			return p.parseForkOrJoinExpression("Effect", "fork")
 		}
 	case "join":
 		if p.inEffectBody && p.lookAhead((*Parser).nextIsUnaryOperandStart) {
+			if p.inAtomicBody {
+				p.disallowInAtomic("join")
+			}
 			return p.parseForkOrJoinExpression("Fiber", "join")
 		}
 	case "par":
 		if p.inEffectBody && p.lookAhead((*Parser).nextIsParCollectionStart) {
+			if p.inAtomicBody {
+				p.disallowInAtomic("par")
+			}
 			return p.parseParExpression()
 		}
 	case "race":
 		if p.inEffectBody && !p.lookAhead((*Parser).nextTokenHasPrecedingLineBreak) && p.lookAhead((*Parser).nextTokenIsOpenBracket) {
+			if p.inAtomicBody {
+				p.disallowInAtomic("race")
+			}
 			return p.parseRaceExpression()
 		}
 	}

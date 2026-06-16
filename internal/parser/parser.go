@@ -82,6 +82,7 @@ type Parser struct {
 	hasDeprecatedTag            bool
 	hasParseError               bool
 	inEffectBody                bool
+	inAtomicBody                bool
 	inMatchArmGuard             bool
 	inEffectTypeSugar           bool
 	currentEffectClassName      string
@@ -1085,6 +1086,9 @@ func (p *Parser) parseStatement() *ast.Statement {
 		}
 	case ast.KindUsingKeyword:
 		if p.isEffectScript() && p.inEffectBody && p.lookAhead((*Parser).nextIsUsingBind) {
+			if p.inAtomicBody {
+				p.parseErrorAt(p.nodePos(), p.nodePos()+len("using"), diagnostics.X_0_is_not_allowed_inside_an_atomic_block, "using")
+			}
 			return p.parseUsingBindStatement()
 		}
 		if p.isUsingDeclaration() {
@@ -3536,8 +3540,10 @@ func (p *Parser) parseFunctionBlock(flags ParseFlags, diagnosticMessage *diagnos
 	saveContextFlags := p.contextFlags
 	saveHasAwaitIdentifier := p.statementHasAwaitIdentifier
 	saveInEffectBody := p.inEffectBody
+	saveInAtomicBody := p.inAtomicBody
 	// EffectScript binds/raise don't reach into nested ordinary functions.
 	p.inEffectBody = false
+	p.inAtomicBody = false
 	p.setContextFlags(ast.NodeFlagsYieldContext, flags&ParseFlagsYield != 0)
 	p.setContextFlags(ast.NodeFlagsAwaitContext, flags&ParseFlagsAwait != 0)
 	// We may be in a [Decorator] context when parsing a function expression or
@@ -3547,6 +3553,7 @@ func (p *Parser) parseFunctionBlock(flags ParseFlags, diagnosticMessage *diagnos
 	p.contextFlags = saveContextFlags
 	p.statementHasAwaitIdentifier = saveHasAwaitIdentifier
 	p.inEffectBody = saveInEffectBody
+	p.inAtomicBody = saveInAtomicBody
 	return block
 }
 

@@ -37,7 +37,7 @@ delta. Anything not mentioned here behaves exactly as in TypeScript.
 ### 1.2 Auto-import
 
 The desugarer references the namespaces `Effect`, `Layer`, `Context`, `Scope`,
-`Fiber`, `Match`, `Data`, `Schema`, and the function `pipe`. For each one
+`Fiber`, `Match`, `STM`, `Data`, `Schema`, and the function `pipe`. For each one
 actually used by the desugared output of a file, a per-namespace subpath import
 `import * as <Namespace> from "<effectImportSource>/<Namespace>";` is synthesized
 unless the file already binds that name (in which case the user's binding is used
@@ -405,6 +405,30 @@ All forms are unary operators / expressions legal inside effect bodies.
 `par` and `race` produce effects; bind them to get values:
 `[a, b] <- par [getA, getB]`.
 
+### 9.1 Atomic transactions (`atomic`)
+
+`atomic` introduces an STM (software transactional memory) transaction. It mirrors
+`effect` but targets `effect/STM` instead of `effect/Effect`:
+
+| Syntax | Desugaring |
+| --- | --- |
+| `atomic { body }` | `STM.gen(function* () { body })` |
+| `atomic name(params) { body }` | `const name = (params) => STM.gen(function* () { body })` |
+
+Inside an atomic body the same statement forms apply — `x <- e` binds (over
+`STM`/`TRef` values), `return` for the success value — except `raise`/`raise.die`
+lower to `STM.fail`/`STM.die` rather than `Effect.fail`/`Effect.die`. Nesting an
+`effect { }` inside `atomic { }` (or vice versa) switches the channel back for
+that inner body.
+
+STM has no traced-fn equivalent of `Effect.fn`, so the declaration form lowers to
+a plain arrow returning `STM.gen` (no tracing span). Run a transaction with
+`STM.commit`: `result <- STM.commit(atomic { ... })`.
+
+The concurrency and resource forms (`fork`, `join`, `par`, `race`, `defer`,
+`using`) are **not** allowed inside an atomic block — STM has no fibers or
+finalizers — and are reported as `TS18121`.
+
 ## 10. Pipeline operator `|>`
 
 Available anywhere in `.ets`/`.etsx` (not just effect bodies), F#-style:
@@ -504,6 +528,7 @@ because a JSX element's `<` must be followed by an identifier, `>`, or `/`.
 | 18112 | `'break'/'continue' cannot cross an 'effect' block boundary.` |
 | 18113 | `'catch' arms can only be attached to an Effect-typed expression.` |
 | 18120 | `'par'/'race'/'fork'/'join' are only allowed inside an effect body.` |
+| 18121 | `'{0}' is not allowed inside an 'atomic' block.` (fork/join/par/race/defer/using — STM has no fibers or finalizers) |
 | 18130 | `'using ... <-' requires a Scope in context; add 'scoped' or provide one.` |
 | 18150 | `Pattern identifiers must be lowercase bindings or capitalized tag references.` |
 | 18151 | `Unreachable match arm (follows a catch-all arm).` |

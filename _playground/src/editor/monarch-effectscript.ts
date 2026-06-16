@@ -7,6 +7,7 @@ import { conf as tsConf, language as tsLanguage } from "monaco-editor/esm/vs/bas
 
 const ETS_KEYWORDS = [
     "effect",
+    "atomic",
     "raise",
     "service",
     "layer",

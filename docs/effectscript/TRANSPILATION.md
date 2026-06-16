@@ -190,6 +190,25 @@ Inline (expression-position) layers — unnamed `Layer` values (SPEC §7.2):
 These produce Effects; combine with bind: `[a, b] <- par [ea, eb]` →
 `const [a, b] = yield* Effect.all([ea, eb], { concurrency: "unbounded" });`.
 
+### 8.1 Atomic (STM)
+
+```
+⟦ atomic { body } ⟧            = STM.gen(function* () { ⟦body⟧ })
+⟦ atomic n(params) { body } ⟧  = const n = (params) => STM.gen(function* () { ⟦body⟧ })
+```
+
+The body uses the same statement desugaring as an effect body, except `raise`
+selects the STM channel:
+
+```
+⟦ raise e ⟧      (inside atomic) = return yield* STM.fail(⟦e⟧)
+⟦ raise.die e ⟧  (inside atomic) = return yield* STM.die(⟦e⟧)
+```
+
+`fork`/`join`/`par`/`race`/`defer`/`using` are rejected inside `atomic` (TS18121).
+A nested `effect { }` inside `atomic { }` (or the reverse) restores the other
+channel for that inner body.
+
 ## 9. Pipeline `|>`
 
 ```

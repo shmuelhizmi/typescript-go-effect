@@ -3763,6 +3763,7 @@ var X_raise_is_only_allowed_inside_an_effect_body = &Message{code: 18101, catego
 var Catch_arms_can_only_be_attached_to_an_expression_inside_an_effect_body = &Message{code: 18113, category: CategoryError, key: "Catch_arms_can_only_be_attached_to_an_expression_inside_an_effect_body_18113", text: "Catch arms can only be attached to an expression inside an effect body."}
 
 var X_0_is_only_allowed_inside_an_effect_body = &Message{code: 18120, category: CategoryError, key: "_0_is_only_allowed_inside_an_effect_body_18120", text: "'{0}' is only allowed inside an effect body."}
+var X_0_is_not_allowed_inside_an_atomic_block = &Message{code: 18121, category: CategoryError, key: "_0_is_not_allowed_inside_an_atomic_block_18121", text: "'{0}' is not allowed inside an 'atomic' block."}
 
 var A_match_arm_pattern_must_be_a_literal_tag_reference_binding_object_pattern_or = &Message{code: 18150, category: CategoryError, key: "A_match_arm_pattern_must_be_a_literal_tag_reference_binding_object_pattern_or_18150", text: "A match arm pattern must be a literal, tag reference, binding, object pattern, or '_'."}
 
@@ -8084,6 +8085,8 @@ func keyToMessage(key Key) *Message {
 		return Catch_arms_can_only_be_attached_to_an_expression_inside_an_effect_body
 	case "_0_is_only_allowed_inside_an_effect_body_18120":
 		return X_0_is_only_allowed_inside_an_effect_body
+	case "_0_is_not_allowed_inside_an_atomic_block_18121":
+		return X_0_is_not_allowed_inside_an_atomic_block
 	case "A_match_arm_pattern_must_be_a_literal_tag_reference_binding_object_pattern_or_18150":
 		return A_match_arm_pattern_must_be_a_literal_tag_reference_binding_object_pattern_or
 	case "Unreachable_match_arm_Colon_it_follows_a_catch_all_arm_18151":
