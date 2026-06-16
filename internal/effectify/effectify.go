@@ -37,8 +37,6 @@ type Options struct {
 // Skip reasons reported in Result.SkipReason.
 const (
 	SkipNoEffectImport    = "no-effect-import"
-	SkipNamespaceImport   = "namespace-import"
-	SkipAliasedImport     = "aliased-helper-import"
 	SkipHelperShadowed    = "helper-shadowed"
 	SkipTSParseError      = "ts-parse-error"
 	SkipETSParseError     = "ets-parse-error"
@@ -116,7 +114,14 @@ func Effectify(fileName string, src string, opts Options) Result {
 		return Result{Output: src, SkipReason: SkipHelperShadowed, Detail: shadowed}
 	}
 
-	r := &rewriter{src: src, file: file, helpers: bindings.helpers, convertPipes: opts.ConvertPipes}
+	r := &rewriter{
+		src:              src,
+		file:             file,
+		localToCanonical: bindings.localToCanonical,
+		barrelRoots:      bindings.barrelRoots,
+		bound:            bindings.bound,
+		convertPipes:     opts.ConvertPipes,
+	}
 	out := r.emit(file.AsNode())
 	if out == src || r.stats.Total() == 0 {
 		return Result{Output: src, Stats: r.stats}

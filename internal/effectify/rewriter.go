@@ -13,9 +13,17 @@ import (
 // source text with child rewrites spliced in. Comments and formatting in
 // untouched regions survive byte-for-byte.
 type rewriter struct {
-	src     string
-	file    *ast.SourceFile
-	helpers map[string]bool
+	src  string
+	file *ast.SourceFile
+	// localToCanonical maps each bound local name to the canonical helper
+	// namespace (Effect, Layer, …, pipe); handles aliases and subpath imports.
+	localToCanonical map[string]string
+	// barrelRoots are local names bound to `import * as X from "effect"`,
+	// used at depth 2 (X.Effect.gen).
+	barrelRoots map[string]bool
+	// bound is the set of canonical helpers reachable in this file (under any
+	// local name); consulted by the pipe/type-sugar gates.
+	bound map[string]bool
 	// inEffectBody is true while emitting statements of a generator being
 	// converted into an effect body; the statement-level patterns (binds,
 	// raise, defer, …) only fire there, mirroring the forward parser.
@@ -184,24 +192,46 @@ func (r *rewriter) tryRewrite(node *ast.Node) (string, bool) {
 
 // ---- shared shape helpers ----
 
-// helperMethod matches `Helper.method` where Helper is a tracked binding.
+// helperMethod matches `Helper.method` where Helper resolves to a tracked
+// canonical namespace — either a direct local binding (Effect.gen, E.gen for an
+// aliased/subpath import) or a depth-2 barrel access (Eff.Effect.gen). The
+// returned helper is always the canonical name, so the `helper == "Effect"`
+// checks throughout the package keep working regardless of the local spelling.
 func (r *rewriter) helperMethod(node *ast.Node) (helper string, method string, ok bool) {
 	if node.Kind != ast.KindPropertyAccessExpression {
 		return "", "", false
 	}
 	pa := node.AsPropertyAccessExpression()
-	if pa.QuestionDotToken != nil || pa.Expression.Kind != ast.KindIdentifier {
-		return "", "", false
-	}
-	helper = pa.Expression.Text()
-	if !r.helpers[helper] {
+	if pa.QuestionDotToken != nil {
 		return "", "", false
 	}
 	name := pa.Name()
 	if name == nil || name.Kind != ast.KindIdentifier {
 		return "", "", false
 	}
-	return helper, name.Text(), true
+	switch pa.Expression.Kind {
+	case ast.KindIdentifier:
+		canon, bound := r.localToCanonical[pa.Expression.Text()]
+		if !bound {
+			return "", "", false
+		}
+		return canon, name.Text(), true
+	case ast.KindPropertyAccessExpression:
+		// depth-2 barrel access: Root.Canonical.method
+		mid := pa.Expression.AsPropertyAccessExpression()
+		if mid.QuestionDotToken != nil || mid.Expression.Kind != ast.KindIdentifier {
+			return "", "", false
+		}
+		if !r.barrelRoots[mid.Expression.Text()] {
+			return "", "", false
+		}
+		midName := mid.Name()
+		if midName == nil || midName.Kind != ast.KindIdentifier || !namespaceHelpers[midName.Text()] {
+			return "", "", false
+		}
+		return midName.Text(), name.Text(), true
+	}
+	return "", "", false
 }
 
 // helperCall matches `Helper.method(args…)` (no type arguments, no optional

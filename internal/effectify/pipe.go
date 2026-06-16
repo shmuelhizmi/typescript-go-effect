@@ -51,7 +51,7 @@ func (r *rewriter) pipeChainParts(node *ast.Node) (head *ast.Node, stages []*ast
 		}
 		head = call.Expression.AsPropertyAccessExpression().Expression
 		stages = call.Arguments.Nodes
-	} else if r.helpers["pipe"] && node.Kind == ast.KindCallExpression {
+	} else if r.bound["pipe"] && node.Kind == ast.KindCallExpression {
 		call := node.AsCallExpression()
 		if call.QuestionDotToken != nil || call.TypeArguments != nil ||
 			call.Expression.Kind != ast.KindIdentifier || call.Expression.Text() != "pipe" ||
@@ -79,7 +79,10 @@ func (r *rewriter) rootedAtHelper(node *ast.Node) bool {
 		case ast.KindPropertyAccessExpression:
 			node = node.AsPropertyAccessExpression().Expression
 		case ast.KindIdentifier:
-			return r.helpers[node.Text()]
+			if _, ok := r.localToCanonical[node.Text()]; ok {
+				return true
+			}
+			return r.barrelRoots[node.Text()]
 		default:
 			return false
 		}

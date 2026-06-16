@@ -49,7 +49,7 @@ func TestEffectifyDebug(t *testing.T) {
 	if reason := bindings.skipReason(); reason != "" {
 		t.Fatalf("skip: %s", reason)
 	}
-	r := &rewriter{src: src, file: file, helpers: bindings.helpers}
+	r := &rewriter{src: src, file: file, localToCanonical: bindings.localToCanonical, barrelRoots: bindings.barrelRoots, bound: bindings.bound}
 	out := r.emit(file.AsNode())
 
 	etsFile := parseFile("/case.ets", out, core.ScriptKindETS)

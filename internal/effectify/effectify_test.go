@@ -114,14 +114,19 @@ func TestEffectifySkips(t *testing.T) {
 			reason: SkipNoEffectImport,
 		},
 		{
-			name:   "namespace import only",
-			src:    "import * as Eff from \"effect\";\nconst x = Eff.Effect.gen(function* () { return 1; });\n",
-			reason: SkipNamespaceImport,
+			// Recognized (E → Effect), but EffectScript desugaring is canonical-
+			// only: `effect { }` lowers to `Effect.gen`, never `E.gen`, so the
+			// round-trip can't reproduce the aliased import. Left verbatim.
+			name:   "aliased helper import cannot round-trip",
+			src:    "import { Effect as E } from \"effect\";\nconst x = E.gen(function* () { return 1; });\n",
+			reason: SkipRoundTripMismatch,
 		},
 		{
-			name:   "aliased helper import",
-			src:    "import { Effect as E } from \"effect\";\nconst x = E.gen(function* () { return 1; });\n",
-			reason: SkipAliasedImport,
+			// Same reason for the barrel namespace: `Eff.Effect.gen` is
+			// recognized at depth 2 but desugaring emits `Effect.gen`.
+			name:   "barrel namespace cannot round-trip",
+			src:    "import * as Eff from \"effect\";\nconst x = Eff.Effect.gen(function* () { return 1; });\n",
+			reason: SkipRoundTripMismatch,
 		},
 		{
 			name:   "helper shadowed",

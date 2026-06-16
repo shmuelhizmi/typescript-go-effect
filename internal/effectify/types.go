@@ -29,8 +29,10 @@ func (r *rewriter) tryEffectTypeSugar(node *ast.Node) (string, bool) {
 		return "", false
 	}
 	qn := ref.TypeName.AsQualifiedName()
-	if qn.Left.Kind != ast.KindIdentifier || qn.Left.Text() != "Effect" || !r.helpers["Effect"] ||
-		qn.Right.Kind != ast.KindIdentifier || qn.Right.Text() != "Effect" {
+	if qn.Left.Kind != ast.KindIdentifier || qn.Right.Kind != ast.KindIdentifier || qn.Right.Text() != "Effect" {
+		return "", false
+	}
+	if canon, ok := r.localToCanonical[qn.Left.Text()]; !ok || canon != "Effect" {
 		return "", false
 	}
 
