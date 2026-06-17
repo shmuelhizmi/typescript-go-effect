@@ -84,6 +84,7 @@ type Parser struct {
 	inEffectBody                bool
 	inAtomicBody                bool
 	inMatchArmGuard             bool
+	inEffectArmBody             bool
 	inEffectTypeSugar           bool
 	currentEffectClassName      string
 	effectHelpersUsed           map[string]struct{}
@@ -4442,7 +4443,14 @@ func (p *Parser) parseParenthesizedArrowFunctionExpression(allowAmbiguity bool, 
 	for unwrappedType != nil && unwrappedType.Kind == ast.KindParenthesizedType {
 		unwrappedType = unwrappedType.Type() // Skip parens if need be
 	}
-	if !allowAmbiguity && p.token != ast.KindEqualsGreaterThanToken && p.token != ast.KindOpenBraceToken {
+	// In an EffectScript match arm body a `({ … })` arm value is followed, on the
+	// next line, by the next arm whose object pattern begins with `{`. That `{`
+	// is a new arm, not this candidate signature's block body, so don't let the
+	// `(params) {` error-recovery swallow it: a line break before the brace ends
+	// the ambiguous arrow speculation and rewinds to the parenthesized expression.
+	braceIsArrowBody := p.token == ast.KindOpenBraceToken &&
+		!(p.inEffectArmBody && p.hasPrecedingLineBreak())
+	if !allowAmbiguity && p.token != ast.KindEqualsGreaterThanToken && !braceIsArrowBody {
 		// Returning undefined here will cause our caller to rewind to where we started from.
 		return nil
 	}
@@ -4534,7 +4542,16 @@ func (p *Parser) parseArrowFunctionExpressionBody(isAsync bool, allowReturnTypeI
 	saveContextFlags := p.contextFlags
 	p.setContextFlags(ast.NodeFlagsAwaitContext, isAsync)
 	p.setContextFlags(ast.NodeFlagsYieldContext, false)
+	// A concise arrow body is an ordinary function, not an effect/atomic body —
+	// EffectScript forms inside it (match, raise, fork, …) must not be treated as
+	// effectful. The brace-body path already resets these via parseFunctionBlock.
+	saveInEffectBody := p.inEffectBody
+	saveInAtomicBody := p.inAtomicBody
+	p.inEffectBody = false
+	p.inAtomicBody = false
 	node := p.parseAssignmentExpressionOrHigherWorker(allowReturnTypeInArrowFunction)
+	p.inEffectBody = saveInEffectBody
+	p.inAtomicBody = saveInAtomicBody
 	p.contextFlags = saveContextFlags
 	return node
 }

@@ -109,12 +109,12 @@ func (r *rewriter) matchArmParts(node *ast.Node, effectful bool) (pattern string
 			if len(args) != 2 {
 				return "", "", "", false, false
 			}
-			lit, isLit := r.literalPatternText(args[0])
-			if !isLit {
+			pat, isPat := r.whenPatternText(args[0])
+			if !isPat {
 				return "", "", "", false, false
 			}
 			binding, body, ok = r.matchHandlerParts(args[1], effectful)
-			return lit, binding, body, false, ok
+			return pat, binding, body, false, ok
 		case "whenOr":
 			if len(args) < 3 {
 				return "", "", "", false, false
@@ -240,16 +240,25 @@ func (r *rewriter) sharedHandlerIIFE(node *ast.Node, wantHelper string, wantMeth
 	return tags, iife.Arguments.Nodes[0], true
 }
 
-// literalPatternText matches the literal pattern kinds the match grammar
-// accepts and returns their source text.
-//
-// Object-literal patterns (`Match.when({ _tag: "x" }, …)` → `{ _tag: "x" } >>`)
-// are intentionally NOT reversed here: although they are expressible, the
-// forward parser mis-parses an object-pattern arm whose body is itself a
-// parenthesized/object-literal expression when another `{`-led arm follows it
-// (arrow-parameter speculation over `({ … })` swallows the next arm). Reversing
-// them would round-trip-fail those chains. Re-enable once the parser
-// disambiguates that case.
+// whenPatternText renders the pattern of a single `Match.when(pattern, handler)`
+// arm. It accepts the scalar literal kinds plus object-literal patterns whose
+// every field value is itself a literal pattern (`{ _tag: "x", n: 1 }`). Object
+// patterns are deliberately limited to single `when` arms: an or-pattern
+// (`whenOr`) of object literals — `{…} | {…} >>` — does not round-trip through
+// the forward parser, so `whenOr` stays scalar-only (see literalPatternText).
+func (r *rewriter) whenPatternText(node *ast.Node) (string, bool) {
+	if node.Kind == ast.KindObjectLiteralExpression {
+		if r.isLiteralObjectPattern(node) {
+			return r.text(node), true
+		}
+		return "", false
+	}
+	return r.literalPatternText(node)
+}
+
+// literalPatternText matches the scalar literal pattern kinds the match grammar
+// accepts and returns their source text. Used for object-pattern field values
+// and for `whenOr` or-patterns.
 func (r *rewriter) literalPatternText(node *ast.Node) (string, bool) {
 	switch node.Kind {
 	case ast.KindStringLiteral, ast.KindNumericLiteral, ast.KindBigIntLiteral,
@@ -263,4 +272,29 @@ func (r *rewriter) literalPatternText(node *ast.Node) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// isLiteralObjectPattern reports whether an object literal is a valid match arm
+// pattern: a non-empty list of `name: <scalar-literal>` assignments (identifier
+// or string keys). Matcher refinements (Match.string, nested Match.when),
+// nested object patterns, and shorthand/spread/computed properties are excluded
+// — they aren't known to reverse cleanly to an object arm pattern.
+func (r *rewriter) isLiteralObjectPattern(node *ast.Node) bool {
+	obj := node.AsObjectLiteralExpression()
+	if len(obj.Properties.Nodes) == 0 {
+		return false
+	}
+	for _, prop := range obj.Properties.Nodes {
+		if prop.Kind != ast.KindPropertyAssignment {
+			return false
+		}
+		name := prop.Name()
+		if name == nil || (name.Kind != ast.KindIdentifier && name.Kind != ast.KindStringLiteral) {
+			return false
+		}
+		if _, ok := r.literalPatternText(prop.AsPropertyAssignment().Initializer); !ok {
+			return false
+		}
+	}
+	return true
 }

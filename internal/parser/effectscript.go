@@ -1478,16 +1478,23 @@ func (p *Parser) parseMatchArmBody(effectful bool) *ast.Expression {
 			block := p.parseFunctionBlock(ParseFlagsNone, nil)
 			return block
 		}
-		return p.parseAssignmentExpressionOrHigher()
+		saveArm := p.inEffectArmBody
+		p.inEffectArmBody = true
+		expr := p.parseAssignmentExpressionOrHigher()
+		p.inEffectArmBody = saveArm
+		return expr
 	}
 	var block *ast.Node
 	if p.token == ast.KindOpenBraceToken {
 		block = p.parseEffectFunctionBlock()
 	} else {
 		saveInEffectBody := p.inEffectBody
+		saveArm := p.inEffectArmBody
 		p.inEffectBody = true
+		p.inEffectArmBody = true
 		value := p.parseAssignmentExpressionOrHigher()
 		p.inEffectBody = saveInEffectBody
+		p.inEffectArmBody = saveArm
 		// End the synthesized return/block tightly at the value (see the matching
 		// note in parseCatchArm) so the trailing trivia up to the next arm — and
 		// its leading comment — is not emitted inside this arm's body.
