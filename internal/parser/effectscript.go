@@ -453,11 +453,21 @@ func (p *Parser) parseEffectDeclaration(pos int, modifiers *ast.ModifierList) *a
 
 	keptModifiers := p.dropEffectDecorators(modifiers)
 
-	funcExpr := p.makeGeneratorExpression(parameters, body, pos, end)
-	fn := p.makeEffectCall("fn", []*ast.Node{p.makeStringLiteral(nameText, pos)}, pos, end)
-	outer := p.finishNodeWithEnd(p.factory.NewCallExpression(fn, nil, nil, p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{funcExpr}), ast.NodeFlagsNone), pos, end)
-	decl := p.finishNodeWithEnd(p.factory.NewVariableDeclaration(name, nil, nil, outer), pos, end)
-	declList := p.finishNodeWithEnd(p.factory.NewVariableDeclarationList(p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{decl}), ast.NodeFlagsConst), pos, end)
+	// Start the inner scaffolding (generator, Effect.fn(...) calls) at the
+	// parameter list, not the declaration's full start `pos`: `pos` is a token
+	// full-start that swallows the construct's leading trivia — including a
+	// preceding statement's orphaned trailing comment — and every real-positioned
+	// node sharing `pos` would re-scan and re-emit it. Only the outer
+	// VariableStatement keeps `pos`, so the construct's leading comment is emitted
+	// exactly once (before `const`); the var-decl/decl-list start at the name so
+	// they do not re-emit it after `const`.
+	headPos := parameters.Pos()
+	declPos := name.Pos()
+	funcExpr := p.makeGeneratorExpression(parameters, body, headPos, end)
+	fn := p.makeEffectCall("fn", []*ast.Node{p.makeStringLiteral(nameText, headPos)}, headPos, end)
+	outer := p.finishNodeWithEnd(p.factory.NewCallExpression(fn, nil, nil, p.newNodeList(core.NewTextRange(headPos, end), []*ast.Node{funcExpr}), ast.NodeFlagsNone), headPos, end)
+	decl := p.finishNodeWithEnd(p.factory.NewVariableDeclaration(name, nil, nil, outer), declPos, end)
+	declList := p.finishNodeWithEnd(p.factory.NewVariableDeclarationList(p.newNodeList(core.NewTextRange(declPos, end), []*ast.Node{decl}), ast.NodeFlagsConst), declPos, end)
 	return p.finishNodeWithEnd(p.factory.NewVariableStatement(keptModifiers, declList), pos, end)
 }
 
@@ -519,12 +529,22 @@ func (p *Parser) parseAtomicDeclaration(pos int, modifiers *ast.ModifierList) *a
 
 	keptModifiers := p.dropEffectDecorators(modifiers)
 
-	emptyParams := p.newNodeList(core.NewTextRange(pos, pos), nil)
-	gen := p.makeHelperCall("STM", "gen", []*ast.Node{p.makeGeneratorExpression(emptyParams, body, pos, end)}, pos, end)
+	// The inner scaffolding (arrow, STM.gen call, generator, empty generator
+	// params) starts at the parameter list rather than the declaration's full
+	// start: `pos` is a token full-start that swallows any leading trivia of the
+	// construct — including a preceding statement's orphaned trailing comment —
+	// and every real-positioned node sharing `pos` would re-scan and re-emit that
+	// comment. Only the outer VariableStatement keeps `pos`, so the construct's
+	// leading comment is emitted exactly once (before `const`); the var-decl and
+	// decl-list start at the name so they do not re-emit it after `const`.
+	headPos := parameters.Pos()
+	declPos := name.Pos()
+	emptyParams := p.newNodeList(core.NewTextRange(headPos, headPos), nil)
+	gen := p.makeHelperCall("STM", "gen", []*ast.Node{p.makeGeneratorExpression(emptyParams, body, headPos, end)}, headPos, end)
 	arrowToken := p.finishSynthesized(p.factory.NewToken(ast.KindEqualsGreaterThanToken))
-	arrow := p.finishNodeWithEnd(p.factory.NewArrowFunction(nil, nil, parameters, nil, nil, arrowToken, gen), pos, end)
-	decl := p.finishNodeWithEnd(p.factory.NewVariableDeclaration(name, nil, nil, arrow), pos, end)
-	declList := p.finishNodeWithEnd(p.factory.NewVariableDeclarationList(p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{decl}), ast.NodeFlagsConst), pos, end)
+	arrow := p.finishNodeWithEnd(p.factory.NewArrowFunction(nil, nil, parameters, nil, nil, arrowToken, gen), headPos, end)
+	decl := p.finishNodeWithEnd(p.factory.NewVariableDeclaration(name, nil, nil, arrow), declPos, end)
+	declList := p.finishNodeWithEnd(p.factory.NewVariableDeclarationList(p.newNodeList(core.NewTextRange(declPos, end), []*ast.Node{decl}), ast.NodeFlagsConst), declPos, end)
 	return p.finishNodeWithEnd(p.factory.NewVariableStatement(keptModifiers, declList), pos, end)
 }
 
@@ -1221,10 +1241,26 @@ func (p *Parser) parseCatchArm() (arm *ast.Node, isCatchAll bool) {
 		p.inEffectBody = true
 		value := p.parseAssignmentExpressionOrHigher()
 		p.inEffectBody = saveInEffectBody
-		ret := p.finishNodeWithEnd(p.factory.NewReturnStatement(value), bodyPos, p.nodePos())
-		block = p.finishNodeWithEnd(p.factory.NewBlock(p.newNodeList(core.NewTextRange(bodyPos, p.nodePos()), []*ast.Node{ret}), false), bodyPos, p.nodePos())
+		// End the synthesized return/block tightly at the value, not at
+		// p.nodePos() (the *next* token's full start, which would swallow the
+		// trailing trivia up to the following arm — including its leading comment
+		// — and emit that comment inside this arm's body).
+		valueEnd := value.End()
+		ret := p.finishNodeWithEnd(p.factory.NewReturnStatement(value), bodyPos, valueEnd)
+		// The block is scaffolding with no real braces in source. Its statement
+		// list carries a synthesized range so the printer's
+		// emitDetachedCommentsAfterStatementList (which scans forward from
+		// Statements.End()) does not pull a *following* construct's leading comment
+		// into this generator body. The ret/value keep real positions so astnav and
+		// LSP still navigate the user's handler expression.
+		stmts := p.newNodeList(core.NewTextRange(-1, -1), []*ast.Node{ret})
+		block = p.finishNodeWithEnd(p.factory.NewBlock(stmts, false), bodyPos, valueEnd)
 	}
-	armEnd := p.nodePos()
+	// End the arm scaffolding (Effect.gen call, generator, handler arrow,
+	// catchTag call) at the body's real end — not p.nodePos(), which is the next
+	// token's full start and would pull the following arm's leading comment into
+	// this arm's generator body.
+	armEnd := block.End()
 
 	emptyParams := p.newNodeList(core.NewTextRange(-1, -1), nil)
 	gen := p.makeEffectCall("gen", []*ast.Node{p.makeGeneratorExpression(emptyParams, block, armPos, armEnd)}, armPos, armEnd)
@@ -1316,10 +1352,15 @@ func (p *Parser) parseMatchExpression() *ast.Expression {
 	p.parseExpected(ast.KindOpenParenToken)
 	scrutinee := p.parseExpressionAllowIn()
 	p.parseExpected(ast.KindCloseParenToken)
+	// Capture the Match.value(...) end here — right after ')' — before consuming
+	// the '{' whose full start would extend across the first arm's leading
+	// comment, causing that comment to be emitted both after Match.value(...) and
+	// as the first pipe argument's leading comment.
+	valueEnd := p.nodePos()
 	p.parseExpected(ast.KindOpenBraceToken)
 
 	effectful := p.inEffectBody
-	value := p.makeHelperCall("Match", "value", []*ast.Node{scrutinee}, pos, p.nodePos())
+	value := p.makeHelperCall("Match", "value", []*ast.Node{scrutinee}, pos, valueEnd)
 
 	var pipeArgs []*ast.Node
 	hasCatchAll := false
@@ -1447,10 +1488,21 @@ func (p *Parser) parseMatchArmBody(effectful bool) *ast.Expression {
 		p.inEffectBody = true
 		value := p.parseAssignmentExpressionOrHigher()
 		p.inEffectBody = saveInEffectBody
-		ret := p.finishNodeWithEnd(p.factory.NewReturnStatement(value), bodyPos, p.nodePos())
-		block = p.finishNodeWithEnd(p.factory.NewBlock(p.newNodeList(core.NewTextRange(bodyPos, p.nodePos()), []*ast.Node{ret}), false), bodyPos, p.nodePos())
+		// End the synthesized return/block tightly at the value (see the matching
+		// note in parseCatchArm) so the trailing trivia up to the next arm — and
+		// its leading comment — is not emitted inside this arm's body.
+		valueEnd := value.End()
+		ret := p.finishNodeWithEnd(p.factory.NewReturnStatement(value), bodyPos, valueEnd)
+		// Synthesized statement list (see the matching note in parseCatchArm): a
+		// negative range keeps the printer's emitDetachedCommentsAfterStatementList
+		// from scanning forward past the value and pulling the following arm's
+		// leading comment into this arm's generator body.
+		stmts := p.newNodeList(core.NewTextRange(-1, -1), []*ast.Node{ret})
+		block = p.finishNodeWithEnd(p.factory.NewBlock(stmts, false), bodyPos, valueEnd)
 	}
-	end := p.nodePos()
+	// End the arm scaffolding at the body's real end, not p.nodePos() (the next
+	// token's full start), which would over-extend across the following arm.
+	end := block.End()
 	emptyParams := p.newNodeList(core.NewTextRange(-1, -1), nil)
 	return p.makeEffectCall("gen", []*ast.Node{p.makeGeneratorExpression(emptyParams, block, bodyPos, end)}, bodyPos, end)
 }

@@ -1,11 +1,13 @@
 package parser_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/microsoft/typescript-go/internal/ast"
 	"github.com/microsoft/typescript-go/internal/core"
 	"github.com/microsoft/typescript-go/internal/parser"
+	"github.com/microsoft/typescript-go/internal/printer"
 	"github.com/microsoft/typescript-go/internal/tspath"
 	"gotest.tools/v3/assert"
 )
@@ -736,5 +738,94 @@ error
 	assert.Equal(t, len(file.Diagnostics()), 0, "expected no parse diagnostics")
 	for _, s := range file.Statements.Nodes {
 		assert.Assert(t, s.Kind != ast.KindClassDeclaration, "no declaration sugar should trigger")
+	}
+}
+
+// emitETS prints the lowered source the way real compilation does: comments
+// included (the corpus comparison re-parses and so cannot see comment bugs).
+func emitETS(t *testing.T, sourceText string) string {
+	t.Helper()
+	file := parseETS(t, sourceText)
+	assert.Equal(t, len(file.Diagnostics()), 0, "expected no parse diagnostics")
+	ec := printer.NewEmitContext()
+	pr := printer.NewPrinter(printer.PrinterOptions{}, printer.PrintHandlers{}, ec)
+	return pr.EmitSourceFile(file)
+}
+
+// A lowered `effect`/`atomic` declaration expands into several real-positioned
+// scaffolding nodes (var-decl chain, arrow, gen call, generator, empty params)
+// that all shared the declaration's full start, so a leading comment was
+// re-scanned and re-emitted by each — appearing two or three times across the
+// lowered initializer. It must appear exactly once.
+func TestEffectScriptDeclarationLeadingCommentEmittedOnce(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"atomic declaration": `// leads the atomic decl
+atomic bump(ref: number, by: number): number {
+  return ref + by
+}
+`,
+		"effect declaration": `// leads the effect decl
+effect compute(x: number): number {
+  return x * 2
+}
+`,
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			out := emitETS(t, src)
+			n := strings.Count(out, "// leads the")
+			assert.Equal(t, n, 1, "leading comment must be emitted exactly once, got %d:\n%s", n, out)
+		})
+	}
+}
+
+// Catch arms lower to a `.pipe(catchTag(...), catchTag(...))` argument list whose
+// synthesized elements are positionally adjacent (no real delimiter token between
+// them), so a comment in the gap was emitted twice — once before the synthetic
+// comma and once as the next arm's leading comment. Each must appear exactly once.
+func TestEffectScriptCatchArmCommentsEmittedOnce(t *testing.T) {
+	t.Parallel()
+	out := emitETS(t, `declare const fetchRow: (id: string) => any;
+tagged error NotFound { id: string }
+tagged error Backend { cause: string }
+effect resolve(id: string): string {
+  out <- fetchRow(id) catch {
+    // handles missing row
+    NotFound as e >> "missing"
+    // handles backend failure
+    Backend as e >> "backend"
+  }
+  return out
+}
+`)
+	for _, marker := range []string{"// handles missing row", "// handles backend failure"} {
+		n := strings.Count(out, marker)
+		assert.Equal(t, n, 1, "arm comment %q must be emitted exactly once, got %d:\n%s", marker, n, out)
+	}
+}
+
+// Match arms lower to `Match.value(x).pipe(when(...), orElse(...))`. The first
+// arm's leading comment sits between the scrutinee's ')' and the first arm, in
+// the gap the over-extended Match.value(...) end and the first pipe argument
+// both scanned — so it was emitted twice (once after Match.value(...), once as
+// the first argument's leading comment). A comment between two effectful arms
+// is the same positionally-adjacent case as catch arms. Each must appear once.
+func TestEffectScriptMatchArmCommentsEmittedOnce(t *testing.T) {
+	t.Parallel()
+	out := emitETS(t, `effect classify(n: number): string {
+  label <- match (n) {
+    // zero case
+    0 >> "zero"
+    // fallback
+    _ >> "other"
+  }
+  return label
+}
+`)
+	for _, marker := range []string{"// zero case", "// fallback"} {
+		n := strings.Count(out, marker)
+		assert.Equal(t, n, 1, "match arm comment %q must be emitted exactly once, got %d:\n%s", marker, n, out)
 	}
 }

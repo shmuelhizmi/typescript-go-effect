@@ -4900,7 +4900,17 @@ func (p *Printer) emitListItems(
 			//          /* End of parameter a */ -> this comment isn't considered to be trailing comment of parameter "a" due to newline
 			//          ,
 			if format&LFDelimitersMask != 0 && previousSibling.End() != parentEnd {
-				if !p.commentsDisabled && p.shouldEmitTrailingComments(previousSibling) {
+				// When the previous sibling's end coincides with the next child's
+				// comment-range start, the comments after that position are the
+				// *leading* comments of the next child and get emitted there.
+				// Emitting them here too (before the delimiter) duplicates them.
+				// This happens for EffectScript-lowered lists whose elements are
+				// positionally adjacent with only a synthetic delimiter between
+				// them; genuine delimited source lists always carry the delimiter
+				// token between the siblings, so the two positions differ and this
+				// guard never trips.
+				if !p.commentsDisabled && p.shouldEmitTrailingComments(previousSibling) &&
+					previousSibling.End() != p.emitContext.CommentRange(child).Pos() {
 					p.emitLeadingComments(previousSibling.End(), false /*elided*/)
 				}
 			}
