@@ -284,10 +284,15 @@ var effectKeywordIdents = map[string]bool{
 	"match": true, "using": true, "release": true,
 }
 
-// bodyConvertible scans a candidate effect body for identifier references or
-// declarations that would collide with EffectScript contextual keywords when
-// the body text is re-parsed as .ets. Property names (s.match, { match: x })
-// are never affected and are skipped.
+// bodyConvertible scans a candidate effect body for identifier references that
+// would collide with EffectScript contextual keywords when the body text is
+// re-parsed as .ets. A contextual keyword (effect, raise, match, join, …) only
+// changes meaning when it leads a statement or primary expression *and* the
+// token that follows it matches that keyword's grammar — e.g. `join(x)`
+// re-parses as the fork/join operator, but `args.join`, `const join = …`,
+// `return service` and `{ match: x }` are all harmless. Only the hazardous
+// follow-token positions are rejected; everything else converts (and the
+// whole-file round-trip verifier is the backstop for anything missed).
 func (r *rewriter) bodyConvertible(body *ast.Node) bool {
 	ok := true
 	var visit func(node *ast.Node) bool
@@ -311,14 +316,102 @@ func (r *rewriter) bodyConvertible(body *ast.Node) bool {
 			})
 		case ast.KindIdentifier:
 			if effectKeywordIdents[node.Text()] {
-				ok = false
-				return true
+				c, sameLine := r.nextSignificant(node.End())
+				if keywordRefHazard(node.Text(), c, sameLine) {
+					ok = false
+					return true
+				}
 			}
 		}
 		return node.ForEachChild(visit)
 	}
 	visit(body)
 	return ok
+}
+
+// nextSignificant returns the first non-trivia byte at or after pos and whether
+// it sits on the same source line as pos (no intervening line break). Line and
+// block comments are skipped. The returned byte is 0 at end of input.
+func (r *rewriter) nextSignificant(pos int) (byte, bool) {
+	sameLine := true
+	for i := pos; i < len(r.src); {
+		c := r.src[i]
+		switch {
+		case c == '\n':
+			sameLine = false
+			i++
+		case c == ' ' || c == '\t' || c == '\r' || c == '\f' || c == '\v':
+			i++
+		case c == '/' && i+1 < len(r.src) && r.src[i+1] == '/':
+			i += 2
+			for i < len(r.src) && r.src[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < len(r.src) && r.src[i+1] == '*':
+			i += 2
+			for i < len(r.src) && !(r.src[i] == '*' && i+1 < len(r.src) && r.src[i+1] == '/') {
+				if r.src[i] == '\n' {
+					sameLine = false
+				}
+				i++
+			}
+			i += 2
+		default:
+			return c, sameLine
+		}
+	}
+	return 0, sameLine
+}
+
+func isIdentStartByte(c byte) bool {
+	return c == '_' || c == '$' || c >= 0x80 ||
+		(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+}
+
+// exprStartByte reports whether c can begin a primary expression (a raise
+// operand). Over-approximates with the common value-start bytes.
+func exprStartByte(c byte) bool {
+	if isIdentStartByte(c) || (c >= '0' && c <= '9') {
+		return true
+	}
+	switch c {
+	case '(', '[', '{', '"', '\'', '`', '+', '-', '!', '~', '@':
+		return true
+	}
+	return false
+}
+
+// keywordRefHazard reports whether a contextual-keyword identifier followed by
+// byte c (sameLine: no intervening line break) would be reinterpreted by the
+// EffectScript parser as that keyword's construct rather than a plain
+// identifier. Mirrors the lookahead predicates in internal/parser/effectscript.go.
+func keywordRefHazard(name string, c byte, sameLine bool) bool {
+	switch name {
+	case "effect":
+		// effect { … } block, or effect name(…)/effect (…) fn forms.
+		return (sameLine && c == '{') || c == '(' || isIdentStartByte(c)
+	case "atomic":
+		return sameLine && c == '{'
+	case "raise":
+		return sameLine && exprStartByte(c)
+	case "match":
+		return c == '('
+	case "layer":
+		return isIdentStartByte(c) || c == '{'
+	case "scoped", "service", "release":
+		return isIdentStartByte(c)
+	case "fork", "join":
+		return sameLine && (c == '(' || isIdentStartByte(c))
+	case "par":
+		return sameLine && (c == '(' || c == '[' || c == '{')
+	case "race":
+		return sameLine && c == '['
+	case "defer":
+		return sameLine && c == '{'
+	case "using":
+		return isIdentStartByte(c) || c == '[' || c == '{'
+	}
+	return false
 }
 
 // paramsText returns the original text between the parentheses of a function
