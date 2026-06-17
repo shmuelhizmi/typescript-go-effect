@@ -121,6 +121,9 @@ func (r *rewriter) tryRewrite(node *ast.Node) (string, bool) {
 		if out, ok := r.tryServiceDeclaration(node); ok {
 			return out, true
 		}
+		if out, ok := r.trySchemaDeclaration(node); ok {
+			return out, true
+		}
 	case ast.KindReturnStatement:
 		if r.inEffectBody {
 			if out, ok := r.tryRaiseStatement(node); ok {

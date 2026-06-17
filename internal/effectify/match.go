@@ -242,6 +242,14 @@ func (r *rewriter) sharedHandlerIIFE(node *ast.Node, wantHelper string, wantMeth
 
 // literalPatternText matches the literal pattern kinds the match grammar
 // accepts and returns their source text.
+//
+// Object-literal patterns (`Match.when({ _tag: "x" }, …)` → `{ _tag: "x" } >>`)
+// are intentionally NOT reversed here: although they are expressible, the
+// forward parser mis-parses an object-pattern arm whose body is itself a
+// parenthesized/object-literal expression when another `{`-led arm follows it
+// (arrow-parameter speculation over `({ … })` swallows the next arm). Reversing
+// them would round-trip-fail those chains. Re-enable once the parser
+// disambiguates that case.
 func (r *rewriter) literalPatternText(node *ast.Node) (string, bool) {
 	switch node.Kind {
 	case ast.KindStringLiteral, ast.KindNumericLiteral, ast.KindBigIntLiteral,

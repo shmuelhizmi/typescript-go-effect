@@ -11,13 +11,13 @@ import (
 // subpath (`import * as Effect from "effect/Effect"`), and accessed as
 // `Effect.method(…)`.
 var namespaceHelpers = map[string]bool{
-	"Effect": true, "Layer": true, "Context": true, "Fiber": true, "Match": true,
+	"Effect": true, "Layer": true, "Context": true, "Fiber": true, "Match": true, "Schema": true,
 }
 
 // helperNames are everything that can be bound from the barrel under its own
 // name: the namespaces plus the free `pipe` function.
 var helperNames = map[string]bool{
-	"Effect": true, "Layer": true, "Context": true, "Fiber": true, "Match": true, "pipe": true,
+	"Effect": true, "Layer": true, "Context": true, "Fiber": true, "Match": true, "Schema": true, "pipe": true,
 }
 
 type effectBindings struct {
