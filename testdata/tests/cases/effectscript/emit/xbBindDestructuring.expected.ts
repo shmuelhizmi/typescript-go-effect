@@ -5,7 +5,7 @@ declare const pair: any;
 declare const record: any;
 declare const nested: any;
 declare const tuple: any;
-const destructuring = Effect.fn("destructuring")(function* () {
+const destructuring = Effect.fn("destructuring")(function* (): Effect.fn.Return<number> {
     // object bind with rename + default
     const { x: px, y: py = 10 } = yield* record;
     // array bind with hole + rest

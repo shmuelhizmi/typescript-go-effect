@@ -28,7 +28,7 @@ const tagged = 1;
 const schema = (x: number) => x;
 const error = schema(tagged);
 const member = { tagged, error };
-const lookup = Effect.fn("lookup")(function* (id: string) {
+const lookup = Effect.fn("lookup")(function* (id: string): Effect.fn.Return<Person, NotFound> {
     if (id === "")
         return yield* Effect.fail(new NotFound({ id }));
     const decoded = yield* Schema.decodeUnknown(Person)({ name: id, age: 1 });

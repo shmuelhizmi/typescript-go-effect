@@ -16,7 +16,7 @@ class Fatal extends Data.TaggedError("Fatal")<{
 }
 declare const runQuery: (sql: string) => any;
 declare const retryHint: (e: unknown) => any;
-const query = Effect.fn("query")(function* (sql: string) {
+const query = Effect.fn("query")(function* (sql: string): Effect.fn.Return<string> {
     const rows = yield* runQuery(sql).pipe(
     // one shared handler for two tags, with a block body that binds first
     ((h) => Effect.catchTags({ DbError: h, NetError: h })

@@ -10,7 +10,7 @@ class Logger extends Context.Tag("Logger")<Logger, {
     info(msg: string): void;
 }>() {
 }
-const boot = Effect.fn("boot")(function* () {
+const boot = Effect.fn("boot")(function* (): Effect.fn.Return<string, never, Config | Logger> {
     const config = yield* Config;
     const logger = yield* Logger;
     const p = yield* config.port();

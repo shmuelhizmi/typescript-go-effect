@@ -13,7 +13,7 @@ class Backend extends Data.TaggedError("Backend")<{
 declare const fetchRow: (id: string) => any;
 declare const auditMiss: (id: string) => any;
 declare const reportRow: (row: unknown) => string;
-const resolve = Effect.fn("resolve")(function* (id: string) {
+const resolve = Effect.fn("resolve")(function* (id: string): Effect.fn.Return<string> {
     const out = yield* fetchRow(id).pipe(
     // arm body binds via <- before returning a recovered value
     Effect.catchTag("NotFound", (e) => Effect.gen(function* () {

@@ -7,7 +7,7 @@ class Invalid extends Data.TaggedError("Invalid")<{
 }> {
 }
 declare const parsePort: (raw: string) => number;
-const validate = Effect.fn("validate")(function* (raw: string) {
+const validate = Effect.fn("validate")(function* (raw: string): Effect.fn.Return<number, Invalid> {
     // statement position: typed failure
     if (raw === "")
         return yield* Effect.fail(new Invalid({ field: "port" }));

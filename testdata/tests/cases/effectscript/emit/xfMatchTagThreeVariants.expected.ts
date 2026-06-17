@@ -17,7 +17,7 @@ class Rect extends Data.TaggedClass("Rect")<{
 }
 declare const shape: Circle | Square | Rect;
 declare const measure: (a: number) => any;
-const area = Effect.fn("area")(function* () {
+const area = Effect.fn("area")(function* (): Effect.fn.Return<number> {
     const a = (yield* Match.value(shape).pipe(Match.tag("Circle", (c) => Effect.gen(function* () { return c.r * c.r * 3; })), Match.tag("Square", (s) => Effect.gen(function* () { return s.side * s.side; })), Match.tag("Rect", (r) => Effect.gen(function* () { return r.w * r.h; })), Match.exhaustive));
     const scaled = yield* measure(a);
     return Number(scaled);

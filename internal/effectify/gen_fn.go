@@ -31,7 +31,7 @@ func (r *rewriter) matchEffectFn(node *ast.Node) (effectFnShape, bool) {
 		if len(args) != 1 {
 			return effectFnShape{}, false
 		}
-		gen, ok := r.genArg(args[0], false)
+		gen, ok := r.genArgTyped(args[0], false, true)
 		if !ok {
 			return effectFnShape{}, false
 		}
@@ -50,7 +50,7 @@ func (r *rewriter) matchEffectFn(node *ast.Node) (effectFnShape, bool) {
 	if len(outerArgs) == 0 {
 		return effectFnShape{}, false
 	}
-	gen, ok := r.genArg(outerArgs[0], false)
+	gen, ok := r.genArgTyped(outerArgs[0], false, true)
 	if !ok {
 		return effectFnShape{}, false
 	}
@@ -66,7 +66,8 @@ func isValidIdentifier(name string) bool {
 	return scanner.IsIdentifierText(name, core.LanguageVariantStandard)
 }
 
-// effectFnText renders `effect name(params) { body }` for a matched shape.
+// effectFnText renders `effect name(params)[: A raises E requires R] { body }`
+// for a matched shape.
 func (r *rewriter) effectFnText(shape effectFnShape) string {
 	var b strings.Builder
 	b.WriteString("effect ")
@@ -74,9 +75,77 @@ func (r *rewriter) effectFnText(shape effectFnShape) string {
 		b.WriteString(shape.name)
 	}
 	b.WriteString(r.paramsText(shape.gen))
+	if shape.gen.Type != nil {
+		// genArgTyped already validated the annotation is renderable.
+		if clause, ok := r.effectFnReturnClause(shape.gen.Type); ok {
+			b.WriteString(clause)
+		}
+	}
 	b.WriteString(" ")
 	b.WriteString(r.emitEffectBody(shape.gen.Body))
 	return b.String()
+}
+
+// effectFnReturnClause renders an `Effect.fn.Return<A, E, R>` generator return
+// type as the EffectScript `: A [raises E] [requires R]` clause. The arg-count
+// mapping is the exact inverse of the forward parser's parseEffectFnReturnType,
+// so the lowering round-trips:
+//
+//	Effect.fn.Return<A>            -> : A
+//	Effect.fn.Return<A, E>        -> : A raises E
+//	Effect.fn.Return<A, never, R> -> : A requires R
+//	Effect.fn.Return<A, E, R>     -> : A raises E requires R
+func (r *rewriter) effectFnReturnClause(typeNode *ast.Node) (string, bool) {
+	if typeNode.Kind != ast.KindTypeReference {
+		return "", false
+	}
+	ref := typeNode.AsTypeReferenceNode()
+	if !r.isEffectFnReturnName(ref.TypeName) {
+		return "", false
+	}
+	if ref.TypeArguments == nil {
+		return "", false
+	}
+	args := ref.TypeArguments.Nodes
+	if len(args) == 0 || len(args) > 3 {
+		return "", false
+	}
+	var b strings.Builder
+	b.WriteString(": ")
+	b.WriteString(r.text(args[0]))
+	switch len(args) {
+	case 2:
+		b.WriteString(" raises ")
+		b.WriteString(r.text(args[1]))
+	case 3:
+		if args[1].Kind == ast.KindNeverKeyword {
+			b.WriteString(" requires ")
+			b.WriteString(r.text(args[2]))
+		} else {
+			b.WriteString(" raises ")
+			b.WriteString(r.text(args[1]))
+			b.WriteString(" requires ")
+			b.WriteString(r.text(args[2]))
+		}
+	}
+	return b.String(), true
+}
+
+// isEffectFnReturnName reports whether an entity name is `<Effect>.fn.Return`,
+// where the leading helper resolves (through aliases/namespaces) to Effect.
+func (r *rewriter) isEffectFnReturnName(name *ast.Node) bool {
+	if name.Kind != ast.KindQualifiedName {
+		return false
+	}
+	outer := name.AsQualifiedName() // (Effect.fn).Return
+	if outer.Right.Text() != "Return" || outer.Left.Kind != ast.KindQualifiedName {
+		return false
+	}
+	mid := outer.Left.AsQualifiedName() // Effect.fn
+	if mid.Right.Text() != "fn" || mid.Left.Kind != ast.KindIdentifier {
+		return false
+	}
+	return r.localToCanonical[mid.Left.Text()] == "Effect"
 }
 
 // tryEffectDeclaration matches pattern #1/#2:

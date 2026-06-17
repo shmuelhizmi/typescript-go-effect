@@ -17,17 +17,17 @@ class Greeter extends Context.Tag("Greeter")<Greeter, {
 const GreeterLive = Layer.effect(Greeter, Effect.gen(function* () {
     return { greeting: Effect.succeed("Hello") };
 }));
-const findUser = Effect.fn("findUser")(function* (id: string) {
+const findUser = Effect.fn("findUser")(function* (id: string): Effect.fn.Return<string, NotFound> {
     if (id === "")
         return yield* Effect.fail(new NotFound({ id }));
     return `user-${id}`;
 });
-const fetchGreeting = Effect.fn("fetchGreeting")(function* (name: string) {
+const fetchGreeting = Effect.fn("fetchGreeting")(function* (name: string): Effect.fn.Return<string, never, Greeter> {
     const greeter = yield* Greeter;
     const prefix = yield* greeter.greeting;
     return `${prefix}, ${name}!`;
 });
-const main = Effect.fn("main")(function* () {
+const main = Effect.fn("main")(function* (): Effect.fn.Return<string, never, Greeter> {
     const user = yield* findUser("42").pipe(Effect.catchTag("NotFound", (e) => Effect.gen(function* () { return `fallback-${e.id}`; })), Effect.catchAll((_) => Effect.gen(function* () { return "anonymous"; })));
     const missing = yield* findUser("").pipe(Effect.catchTag("NotFound", (e) => Effect.gen(function* () { return "missing!"; })));
     const [g1, g2] = yield* Effect.all([fetchGreeting(user), fetchGreeting(missing)], { concurrency: "unbounded" });

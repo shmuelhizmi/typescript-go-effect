@@ -14,7 +14,7 @@ class Logger extends Context.Tag("Logger")<Logger, {
 declare const runPromise: (e: unknown) => Promise<unknown>;
 const ClockLive = Layer.succeed(Clock, { now: () => 0 });
 const LoggerLive = Layer.succeed(Logger, { info: () => undefined });
-const main = Effect.fn("main")(function* () {
+const main = Effect.fn("main")(function* (): Effect.fn.Return<number, never, Clock | Logger> {
     const clock = yield* Clock;
     const logger = yield* Logger;
     logger.info("tick");

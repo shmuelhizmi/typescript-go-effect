@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 declare const source: any;
 declare function load(id: number): any;
 declare function persist(v: number): any;
-const nestedAndChained = Effect.fn("nestedAndChained")(function* () {
+const nestedAndChained = Effect.fn("nestedAndChained")(function* (): Effect.fn.Return<number> {
     // RHS is itself an inline effect{} block expression
     const seed = yield* Effect.gen(function* () {
         const raw = yield* source;

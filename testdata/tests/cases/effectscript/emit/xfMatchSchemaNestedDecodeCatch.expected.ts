@@ -18,7 +18,7 @@ class Customer extends Schema.Class<Customer>("Customer")({
 }) {
 }
 declare const input: unknown;
-const loadCustomer = Effect.fn("loadCustomer")(function* () {
+const loadCustomer = Effect.fn("loadCustomer")(function* (): Effect.fn.Return<Customer, ParseError> {
     const customer = yield* Schema.decodeUnknown(Customer)(input).pipe(Effect.catchAll((e) => Effect.gen(function* () { return (yield* Effect.fail(new ParseError({ cause: e }))); })));
     return customer;
 });

@@ -258,12 +258,27 @@ func (r *rewriter) helperCall(node *ast.Node) (helper string, method string, arg
 // a generator function expression with no name, no type parameters and no
 // return type annotation, whose body avoids the contextual-keyword hazards.
 func (r *rewriter) genArg(node *ast.Node, wantZeroParams bool) (*ast.FunctionExpression, bool) {
+	return r.genArgTyped(node, wantZeroParams, false)
+}
+
+// genArgTyped matches the generator argument of an Effect.gen/Effect.fn call.
+// When allowReturnType is set, a generator return annotation is accepted only
+// if it is an `Effect.fn.Return<…>` reference the reverse can render back as a
+// `: A raises E requires R` clause; any other annotation declines (it has no
+// EffectScript surface). Effect.gen blocks pass false — `effect { }` has no
+// return-clause syntax, so an annotated gen must stay verbatim.
+func (r *rewriter) genArgTyped(node *ast.Node, wantZeroParams bool, allowReturnType bool) (*ast.FunctionExpression, bool) {
 	if node.Kind != ast.KindFunctionExpression {
 		return nil, false
 	}
 	fn := node.AsFunctionExpression()
-	if fn.AsteriskToken == nil || fn.Name() != nil || fn.TypeParameters != nil || fn.Type != nil || fn.Body == nil {
+	if fn.AsteriskToken == nil || fn.Name() != nil || fn.TypeParameters != nil || fn.Body == nil {
 		return nil, false
+	}
+	if fn.Type != nil {
+		if _, ok := r.effectFnReturnClause(fn.Type); !ok || !allowReturnType {
+			return nil, false
+		}
 	}
 	if fn.Modifiers() != nil {
 		return nil, false

@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 declare const probe: any;
 declare function risky(n: number): any;
 declare function cleanup(): any;
-const earlyReturn = Effect.fn("earlyReturn")(function* (n: number) {
+const earlyReturn = Effect.fn("earlyReturn")(function* (n: number): Effect.fn.Return<number> {
     const status = yield* probe;
     // early return out of a guarded branch, after a bind in that branch
     if (status < 0) {

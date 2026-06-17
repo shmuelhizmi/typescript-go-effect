@@ -12,7 +12,7 @@ class Timeout extends Data.TaggedError("Timeout")<{
 }
 declare const lookupRow: (id: string) => any;
 // the producer can raise either tagged error depending on input
-const load = Effect.fn("load")(function* (id: string) {
+const load = Effect.fn("load")(function* (id: string): Effect.fn.Return<string, NotFound | Timeout> {
     if (id === "")
         return yield* Effect.fail(new NotFound({ id }));
     const row = yield* lookupRow(id);
@@ -21,7 +21,7 @@ const load = Effect.fn("load")(function* (id: string) {
     return String(row);
 });
 // the consumer catches each tag in its own arm with an `as e` binding
-const loadOrDefault = Effect.fn("loadOrDefault")(function* (id: string) {
+const loadOrDefault = Effect.fn("loadOrDefault")(function* (id: string): Effect.fn.Return<string> {
     const value = yield* load(id).pipe(Effect.catchTag("NotFound", (e) => Effect.gen(function* () { return `missing:${e.id}`; })), Effect.catchTag("Timeout", (e) => Effect.gen(function* () { return `slow:${e.ms}`; })));
     return value;
 });

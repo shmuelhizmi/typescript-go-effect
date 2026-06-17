@@ -9,7 +9,7 @@ class UserRepo extends Context.Tag("UserRepo")<UserRepo, {
     findById(id: string): Effect.Effect<string, NotFound, never>;
 }>() {
 }
-const loadName = Effect.fn("loadName")(function* (id: string) {
+const loadName = Effect.fn("loadName")(function* (id: string): Effect.fn.Return<string, never, UserRepo> {
     const repo = yield* UserRepo;
     const name = yield* repo.findById(id);
     return name.toUpperCase();

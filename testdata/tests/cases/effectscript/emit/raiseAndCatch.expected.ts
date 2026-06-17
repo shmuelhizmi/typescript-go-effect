@@ -22,11 +22,11 @@ const raises = Effect.fn("raises")(function* (id: string) {
     const v = id !== "x" ? id : (yield* Effect.fail(new NotFound({ id })));
     return yield* Effect.die(new Error("boom"));
 });
-const catches = Effect.fn("catches")(function* (id: string) {
+const catches = Effect.fn("catches")(function* (id: string): Effect.fn.Return<string> {
     const html = yield* renderUser(id).pipe(Effect.catchTag("NotFound", (e) => Effect.gen(function* () { return render404(e.id); })), ((h) => Effect.catchTags({ DbError: h, NetError: h }))((e) => Effect.gen(function* () { return (yield* Effect.fail(new HttpError({ status: 503, cause: e }))); })), Effect.catchAll((e) => Effect.gen(function* () { yield* Effect.logError(e); return "oops"; })));
     return html;
 });
-const regionGuard = Effect.fn("regionGuard")(function* (id: string) {
+const regionGuard = Effect.fn("regionGuard")(function* (id: string): Effect.fn.Return<string> {
     const page = yield* Effect.gen(function* () {
         const user = yield* renderUser(id);
         return String(user);

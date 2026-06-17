@@ -19,7 +19,7 @@ declare const a: {
     };
 };
 declare function acquire(): string;
-const boundaries = Effect.fn("boundaries")(function* () {
+const boundaries = Effect.fn("boundaries")(function* (): Effect.fn.Return<string> {
     const user = yield* findUser("42");
     // member-access expr  then  array destructuring bind  (the reported bug)
     user.length;

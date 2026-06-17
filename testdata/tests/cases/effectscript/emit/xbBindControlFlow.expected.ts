@@ -6,7 +6,7 @@ declare const fetchN: any;
 declare const items: number[];
 declare function step(n: number): any;
 declare function done(n: number): any;
-const controlFlow = Effect.fn("controlFlow")(function* (flag: boolean) {
+const controlFlow = Effect.fn("controlFlow")(function* (flag: boolean): Effect.fn.Return<number> {
     let total = 0;
     if (flag) {
         const a = yield* fetchN;

@@ -305,9 +305,16 @@ func (p *Parser) nextIsRaiseOperandStart() bool {
 	// (assignment, label, call of a user function named raise, etc.).
 	switch p.token {
 	case ast.KindEqualsToken, ast.KindColonToken, ast.KindSemicolonToken, ast.KindCommaToken,
-		ast.KindOpenParenToken, ast.KindCloseParenToken, ast.KindCloseBraceToken, ast.KindCloseBracketToken,
+		ast.KindCloseParenToken, ast.KindCloseBraceToken, ast.KindCloseBracketToken,
 		ast.KindEqualsEqualsToken, ast.KindEqualsEqualsEqualsToken, ast.KindEqualsGreaterThanToken, ast.KindQuestionToken:
 		return false
+	case ast.KindOpenParenToken:
+		// `raise(x)` is a call to a user function named raise, but
+		// `raise (<- e)` raises a parenthesized bind expression — a
+		// `<-` arrow after the paren cannot be plain TS, so it is
+		// unambiguously the raise keyword form.
+		p.nextToken()
+		return p.isAtBindArrow()
 	case ast.KindDotToken:
 		// Only 'raise.die <operand>' is the keyword form.
 		p.nextToken()
@@ -445,9 +452,9 @@ func (p *Parser) parseEffectDeclaration(pos int, modifiers *ast.ModifierList) *a
 	name := p.parseIdentifier()
 	nameText := name.Text()
 	parameters := p.parseParameters(ParseFlagsYield)
-	// The annotation describes the resulting Effect, not the generator; it is
-	// parsed and dropped here (checking against it is a later phase).
-	p.parseReturnType(ast.KindColonToken, false /*isType*/)
+	// `: A raises E requires R` becomes the generator's own return type
+	// Effect.fn.Return<A, E, R> (the type Effect.fn expects on its body).
+	returnType := p.parseEffectFnReturnType()
 	body := p.parseEffectFunctionBlock()
 	end := p.nodePos()
 
@@ -463,7 +470,7 @@ func (p *Parser) parseEffectDeclaration(pos int, modifiers *ast.ModifierList) *a
 	// they do not re-emit it after `const`.
 	headPos := parameters.Pos()
 	declPos := name.Pos()
-	funcExpr := p.makeGeneratorExpression(parameters, body, headPos, end)
+	funcExpr := p.makeTypedGeneratorExpression(parameters, returnType, body, headPos, end)
 	fn := p.makeEffectCall("fn", []*ast.Node{p.makeStringLiteral(nameText, headPos)}, headPos, end)
 	outer := p.finishNodeWithEnd(p.factory.NewCallExpression(fn, nil, nil, p.newNodeList(core.NewTextRange(headPos, end), []*ast.Node{funcExpr}), ast.NodeFlagsNone), headPos, end)
 	decl := p.finishNodeWithEnd(p.factory.NewVariableDeclaration(name, nil, nil, outer), declPos, end)
@@ -479,10 +486,10 @@ func (p *Parser) parseNamedEffectFnExpression() *ast.Expression {
 	p.nextToken() // consume 'effect'
 	nameText := p.parseIdentifier().Text()
 	parameters := p.parseParameters(ParseFlagsYield)
-	p.parseReturnType(ast.KindColonToken, false /*isType*/)
+	returnType := p.parseEffectFnReturnType()
 	body := p.parseEffectFunctionBlock()
 	end := p.nodePos()
-	funcExpr := p.makeGeneratorExpression(parameters, body, pos, end)
+	funcExpr := p.makeTypedGeneratorExpression(parameters, returnType, body, pos, end)
 	fn := p.makeEffectCall("fn", []*ast.Node{p.makeStringLiteral(nameText, pos)}, pos, end)
 	return p.finishNodeWithEnd(p.factory.NewCallExpression(fn, nil, nil, p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{funcExpr}), ast.NodeFlagsNone), pos, end)
 }
@@ -686,8 +693,69 @@ func (p *Parser) makeStringLiteral(text string, pos int) *ast.Expression {
 }
 
 func (p *Parser) makeGeneratorExpression(parameters *ast.NodeList, body *ast.Node, pos int, end int) *ast.Expression {
+	return p.makeTypedGeneratorExpression(parameters, nil, body, pos, end)
+}
+
+func (p *Parser) makeTypedGeneratorExpression(parameters *ast.NodeList, returnType *ast.TypeNode, body *ast.Node, pos int, end int) *ast.Expression {
 	asterisk := p.finishNodeWithEnd(p.factory.NewToken(ast.KindAsteriskToken), pos, pos)
-	return p.finishNodeWithEnd(p.factory.NewFunctionExpression(nil, asterisk, nil, nil, parameters, nil, nil, body), pos, end)
+	return p.finishNodeWithEnd(p.factory.NewFunctionExpression(nil, asterisk, nil, nil, parameters, returnType, nil, body), pos, end)
+}
+
+// parseEffectFnReturnType parses the optional return clause of an effect fn
+// declaration — `: A [raises E] [requires R]` — and lowers it to the generator's
+// own return type `Effect.fn.Return<A, E, R>` (the type Effect.fn expects on its
+// generator). The clause→arg-count mapping is a bijection with the reverse
+// migrator so the round-trip is exact:
+//
+//	: A                       -> Effect.fn.Return<A>
+//	: A raises E              -> Effect.fn.Return<A, E>
+//	: A requires R            -> Effect.fn.Return<A, never, R>
+//	: A raises E requires R   -> Effect.fn.Return<A, E, R>
+//
+// Effect.fn.Return defaults E and R to never, matching the omitted-clause
+// semantics of the `A raises E requires R` type sugar.
+func (p *Parser) parseEffectFnReturnType() *ast.TypeNode {
+	if p.token != ast.KindColonToken {
+		return nil
+	}
+	pos := p.nodePos()
+	p.nextToken() // consume ':'
+	// Suppress the `raises`/`requires` type sugar while parsing the operands so
+	// the clauses land in Effect.fn.Return slots instead of an Effect.Effect<…>.
+	saveSugar := p.inEffectTypeSugar
+	p.inEffectTypeSugar = true
+	successType := p.parseType()
+	var errType, reqType *ast.TypeNode
+	if p.token == ast.KindIdentifier && p.scanner.TokenValue() == "raises" && !p.hasPrecedingLineBreak() {
+		p.nextToken()
+		errType = p.parseType()
+	}
+	if p.token == ast.KindIdentifier && p.scanner.TokenValue() == "requires" && !p.hasPrecedingLineBreak() {
+		p.nextToken()
+		reqType = p.parseType()
+	}
+	p.inEffectTypeSugar = saveSugar
+	end := p.nodePos()
+
+	typeArgs := []*ast.Node{successType}
+	if errType != nil {
+		typeArgs = append(typeArgs, errType)
+	}
+	if reqType != nil {
+		if errType == nil {
+			// requires-without-raises pins the error slot to never explicitly.
+			typeArgs = append(typeArgs, p.finishSynthesized(p.factory.NewKeywordTypeNode(ast.KindNeverKeyword)))
+		}
+		typeArgs = append(typeArgs, reqType)
+	}
+
+	p.useEffectHelper("Effect")
+	effectId := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier("Effect")))
+	fnId := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier("fn")))
+	effectFn := p.finishSynthesized(p.factory.NewQualifiedName(effectId, fnId))
+	returnId := p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier("Return")))
+	qualified := p.finishSynthesized(p.factory.NewQualifiedName(effectFn, returnId))
+	return p.finishNodeWithEnd(p.factory.NewTypeReferenceNode(qualified, p.newNodeList(core.NewTextRange(-1, -1), typeArgs)), pos, end)
 }
 
 // effectHelperImportOrder fixes the order of the synthesized imports.
@@ -1846,10 +1914,10 @@ func (p *Parser) parseEffectFunctionExpression() *ast.Expression {
 	pos := p.nodePos()
 	p.nextToken() // consume 'effect'
 	parameters := p.parseParameters(ParseFlagsYield)
-	p.parseReturnType(ast.KindColonToken, false /*isType*/)
+	returnType := p.parseEffectFnReturnType()
 	body := p.parseEffectFunctionBlock()
 	end := p.nodePos()
-	funcExpr := p.makeGeneratorExpression(parameters, body, pos, end)
+	funcExpr := p.makeTypedGeneratorExpression(parameters, returnType, body, pos, end)
 	return p.makeEffectCall("fn", []*ast.Node{funcExpr}, pos, end)
 }
 
@@ -1891,11 +1959,11 @@ func (p *Parser) parseEffectClassMethod(pos int, modifiers *ast.ModifierList) *a
 		spanName = p.currentEffectClassName + "." + name.Text()
 	}
 	parameters := p.parseParameters(ParseFlagsYield)
-	p.parseReturnType(ast.KindColonToken, false /*isType*/)
+	returnType := p.parseEffectFnReturnType()
 	body := p.parseEffectFunctionBlock()
 	end := p.nodePos()
 
-	funcExpr := p.makeGeneratorExpression(parameters, body, pos, end)
+	funcExpr := p.makeTypedGeneratorExpression(parameters, returnType, body, pos, end)
 	fn := p.makeEffectCall("fn", []*ast.Node{p.makeStringLiteral(spanName, pos)}, pos, end)
 	value := p.finishNodeWithEnd(p.factory.NewCallExpression(fn, nil, nil, p.newNodeList(core.NewTextRange(pos, end), []*ast.Node{funcExpr}), ast.NodeFlagsNone), pos, end)
 	return p.finishNodeWithEnd(p.factory.NewPropertyDeclaration(modifiers, name, nil, nil, value), pos, end)
