@@ -52,6 +52,8 @@ export interface Example {
 export const EXAMPLES: Example[] = [
   { id: "greeter", label: "Greeter (default)" },
   { id: "quickstart", label: "Quickstart (kitchen sink)" },
+  { id: "stm", label: "Atomic (STM transactions)" },
+  { id: "schema", label: "Schema (validation)" },
 ]
 
 export async function loadExample(id: string): Promise<string> {
