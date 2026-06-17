@@ -41,7 +41,7 @@ greet("world")
 	assert.Equal(t, len(result.Diagnostics), 0, "unexpected diagnostics: %v", result.Diagnostics)
 	assert.Equal(t, len(result.Files), 1)
 	assert.Equal(t, result.Files[0].Name, "/project/main.js")
-	assert.Assert(t, strings.Contains(result.Files[0].Text, `from "effect"`), "emitted JS should import effect: %s", result.Files[0].Text)
+	assert.Assert(t, strings.Contains(result.Files[0].Text, `from "effect/Effect"`), "emitted JS should import the effect/Effect subpath: %s", result.Files[0].Text)
 }
 
 func TestCompileReportsSyntacticDiagnostics(t *testing.T) {
