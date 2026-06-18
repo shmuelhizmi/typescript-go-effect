@@ -80,7 +80,9 @@ positions defined below (like `async`, `satisfies`, `accessor`). Look-ahead rule
 * `service`, `layer`, `schema` are keywords at declaration position when followed
   by an identifier (same scheme as `type`, `namespace`); `schema` additionally
   requires `{` after the name. `tagged` is a keyword only in the exact sequence
-  `tagged error Name {`; `error` only as its second word. `layer` is *additionally*
+  `tagged error Name {`; `error` is a keyword only as the second word of `tagged
+  error Name {` or `schema error Name {` (a `schema error {` with no following
+  name is a plain `schema` named `error`). `layer` is *additionally*
   a keyword at expression position in the shapes `layer Tag {` / `layer Tag (`
   (the inline layer, §7.2) — distinguished from the named declaration by the
   absence of the `:` (and from a `layer(...)` call by the leading tag identifier).
@@ -371,6 +373,24 @@ schema Person {
 `Person` is simultaneously a class (`new Person({ name, age })`), the instance
 type, and a schema (`Schema.decodeUnknown(Person)`). `Schema` is auto-imported
 (§1.2). `export` is allowed.
+
+### 7.5 `schema error` declaration
+
+Declares a `Schema.TaggedError` — a tagged error that is *also* a Schema (so it
+is serializable/decodable), as opposed to the plain `Data.TaggedError` produced
+by `tagged error` (§5.1). Fields are schema-value expressions, like `schema`:
+
+```ts
+schema error BadRequest {
+  message: Schema.String
+}
+```
+
+→ `class BadRequest extends Schema.TaggedError<BadRequest>()("BadRequest", { message: Schema.String }) {}`.
+
+The `error` word is only a keyword when a declaration name follows it; `schema
+error { … }` is still a plain `schema` named `error`. Use sites are plain Effect
+(`raise new BadRequest({ message })`, `catch { BadRequest as e >> ... }`).
 
 ## 8. Resources and finalization
 

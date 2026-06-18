@@ -43,6 +43,9 @@ func (p *Parser) tryParseEffectScriptStatement() *ast.Statement {
 				return p.parseTaggedErrorDeclaration(p.nodePos(), nil /*modifiers*/)
 			}
 		case "schema":
+			if p.lookAhead((*Parser).nextIsSchemaErrorDeclarationStart) {
+				return p.parseSchemaErrorDeclaration(p.nodePos(), nil /*modifiers*/)
+			}
 			if p.lookAhead((*Parser).nextIsSchemaDeclarationStart) {
 				return p.parseSchemaDeclaration(p.nodePos(), nil /*modifiers*/)
 			}
@@ -153,6 +156,17 @@ func (p *Parser) nextIsSchemaDeclarationStart() bool {
 	return p.nextIsServiceDeclarationStart()
 }
 
+// schema error Name {  — must be checked before the plain `schema Name {` form,
+// which would otherwise read `error` as the schema name (`schema error {` stays
+// a plain schema named "error").
+func (p *Parser) nextIsSchemaErrorDeclarationStart() bool {
+	p.nextToken() // consume 'schema'
+	if p.token != ast.KindIdentifier || p.scanner.TokenValue() != "error" || p.hasPrecedingLineBreak() {
+		return false
+	}
+	return p.nextIsServiceDeclarationStart()
+}
+
 func (p *Parser) nextIsLayerDeclarationStart() bool {
 	p.nextToken()
 	if p.token != ast.KindIdentifier || p.hasPrecedingLineBreak() {
@@ -228,6 +242,9 @@ func (p *Parser) tryParseEffectScriptDeclaration(pos int, modifiers *ast.Modifie
 			return p.parseTaggedErrorDeclaration(pos, modifiers)
 		}
 	case "schema":
+		if p.lookAhead((*Parser).nextIsSchemaErrorDeclarationStart) {
+			return p.parseSchemaErrorDeclaration(pos, modifiers)
+		}
 		if p.lookAhead((*Parser).nextIsSchemaDeclarationStart) {
 			return p.parseSchemaDeclaration(pos, modifiers)
 		}
@@ -260,7 +277,7 @@ func (p *Parser) scanStartOfEffectScriptDeclaration() bool {
 	case "tagged":
 		return p.nextIsTaggedErrorDeclarationStart()
 	case "schema":
-		return p.nextIsSchemaDeclarationStart()
+		return p.lookAhead((*Parser).nextIsSchemaErrorDeclarationStart) || p.lookAhead((*Parser).nextIsSchemaDeclarationStart)
 	case "layer":
 		return p.nextIsLayerDeclarationStart()
 	case "scoped":
@@ -886,6 +903,34 @@ func (p *Parser) parseSchemaDeclaration(pos int, modifiers *ast.ModifierList) *a
 	nameArgs := p.newNodeList(core.NewTextRange(-1, -1), []*ast.Node{p.makeStringLiteral(nameText, pos)})
 	inner := p.finishSynthesized(p.factory.NewCallExpression(classAccess, nil, p.newNodeList(core.NewTextRange(-1, -1), []*ast.Node{selfRef}), nameArgs, ast.NodeFlagsNone))
 	outer := p.finishNodeWithEnd(p.factory.NewCallExpression(inner, nil, nil, p.newNodeList(fieldsLoc, []*ast.Node{fields}), ast.NodeFlagsNone), fields.Pos(), fields.End())
+	withTypeArgs := p.finishNodeWithEnd(p.factory.NewExpressionWithTypeArguments(outer, nil), fields.Pos(), fields.End())
+	heritage := p.finishNodeWithEnd(p.factory.NewHeritageClause(ast.KindExtendsKeyword, p.newNodeList(fieldsLoc, []*ast.Node{withTypeArgs})), fields.Pos(), fields.End())
+	heritageList := p.newNodeList(fieldsLoc, []*ast.Node{heritage})
+	members := p.newNodeList(core.NewTextRange(-1, -1), nil)
+	return p.finishNodeWithEnd(p.factory.NewClassDeclaration(modifiers, name, nil, heritageList, members), pos, end)
+}
+
+// schema error Name { fields }
+//
+//	==>  class Name extends Schema.TaggedError<Name>()("Name", { fields }) {}
+func (p *Parser) parseSchemaErrorDeclaration(pos int, modifiers *ast.ModifierList) *ast.Statement {
+	p.nextToken() // consume 'schema'
+	p.nextToken() // consume 'error'
+	name := p.parseIdentifier()
+	nameText := name.Text()
+	fields := p.parseSchemaFields()
+	end := p.nodePos()
+
+	// The heritage chain spans the user-written fields object so navigation
+	// machinery descends to the real property assignments inside it.
+	fieldsLoc := core.NewTextRange(fields.Pos(), fields.End())
+	taggedErrorAccess := p.makeHelperAccess("Schema", "TaggedError")
+	selfRef := p.finishSynthesized(p.factory.NewTypeReferenceNode(p.finishSynthesized(p.factory.NewIdentifier(p.internIdentifier(nameText))), nil))
+	// inner: Schema.TaggedError<Name>()  — self type argument, empty call.
+	inner := p.finishSynthesized(p.factory.NewCallExpression(taggedErrorAccess, nil, p.newNodeList(core.NewTextRange(-1, -1), []*ast.Node{selfRef}), p.newNodeList(core.NewTextRange(-1, -1), nil), ast.NodeFlagsNone))
+	// outer: inner("Name", { fields })
+	outerArgs := p.newNodeList(fieldsLoc, []*ast.Node{p.makeStringLiteral(nameText, pos), fields})
+	outer := p.finishNodeWithEnd(p.factory.NewCallExpression(inner, nil, nil, outerArgs, ast.NodeFlagsNone), fields.Pos(), fields.End())
 	withTypeArgs := p.finishNodeWithEnd(p.factory.NewExpressionWithTypeArguments(outer, nil), fields.Pos(), fields.End())
 	heritage := p.finishNodeWithEnd(p.factory.NewHeritageClause(ast.KindExtendsKeyword, p.newNodeList(fieldsLoc, []*ast.Node{withTypeArgs})), fields.Pos(), fields.End())
 	heritageList := p.newNodeList(fieldsLoc, []*ast.Node{heritage})

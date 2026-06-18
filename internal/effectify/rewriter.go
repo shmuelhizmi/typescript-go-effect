@@ -124,6 +124,9 @@ func (r *rewriter) tryRewrite(node *ast.Node) (string, bool) {
 		if out, ok := r.trySchemaDeclaration(node); ok {
 			return out, true
 		}
+		if out, ok := r.trySchemaErrorDeclaration(node); ok {
+			return out, true
+		}
 		if out, ok := r.tryTaggedErrorDeclaration(node); ok {
 			return out, true
 		}
