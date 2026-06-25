@@ -261,6 +261,31 @@ shape  (declared: Shape)  src/shapes.ts
     28:32   return `square s=${shape.side}`;                       Square  (narrowed from Shape)
 ```
 
+### `perf` — type-system performance insights
+
+Each `perf` command runs a fresh, fully traced compile of the project entirely in memory (no trace files are written to disk), then aggregates the trace, the recorded type descriptors, and the compiler statistics into agent-actionable rankings. The ranking commands default to the user's own files; pass `--include-libs` to fold in bundled libs and `node_modules`.
+
+| Command | Description | Flags |
+|---|---|---|
+| `perf summary` | Phase budget (parse/bind/check/emit split), project counters, and a one-line bottleneck verdict | `--emit`, `--single-threaded` |
+| `perf report` | Full report: every analysis from one traced compile, with optional standalone HTML export | `--top N` (default 25), `--include-libs`, `--generate-report`, `--out <path>` (default `tsagent-perf-report.html`; implies `--generate-report`), `--emit`, `--single-threaded` |
+| `perf hot-files` | Files ranked by compiler time (parse/bind/check) and recorded type count | `--top N` (default 50), `--include-libs`, `--emit`, `--single-threaded` |
+| `perf hot-types` | Generics/aliases ranked by how many distinct types they instantiate (instantiation spread), with conditional/union signals | `--top N` (default 50), `--include-libs`, `--emit`, `--single-threaded` |
+| `perf hot-checks` | Individual checker operations the tracer sampled as slow (>~10ms), located back to a file | `--top N` (default 50), `--emit`, `--single-threaded` |
+| `perf depth-limits` | Type explosions that tripped an instantiation/recursion/union-size guard — the highest-value fixes | `--emit`, `--single-threaded` |
+
+Shared flags: `--emit` also measures the emit phase (declaration-emit cost); `--single-threaded` uses one checker for cleaner per-file timing attribution at the cost of wall-clock speed.
+
+`perf summary` on the fixture:
+
+```
+$ tsagent perf summary
+Files 71  Lines 56311  Symbols 58501  Types 39384  Instantiations 45549  Mem 142107K
+parse 0.012s (9%)  bind 0.004s (3%)  check 0.123s (88%)  emit 0.000s (0%)  total 0.139s
+types/file 554.7  instantiations/type 1.16  depth-limit hits 0
+verdict: check-dominated — the type system is the bottleneck
+```
+
 ### `refactor` — transactional mutations
 
 All refactor commands share the transaction flags `--apply`, `--allow-errors`, and `--strict-gate` (see Transactions below). Targeted commands (`rename`, `safe-delete`, `inline`, `mv-symbol`, `signature`) share `--at file:line:col`, `--symbol <id>`, `--name <n>`, `--kind <k>` (or pass the target as the first positional argument).
