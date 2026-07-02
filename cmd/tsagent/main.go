@@ -66,6 +66,13 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return cli.ExitOK
 	}
 
+	// Hidden dynamic-completion endpoint, called by the shell scripts that
+	// `tsagent completion <shell>` prints. It must bypass normal flag parsing
+	// (its args are a raw, partially-typed command line).
+	if args[0] == "__complete" {
+		return runComplete(args[1:], stdout)
+	}
+
 	family := args[0]
 	cmd, cmdArgs, ok := lookupCommand(family, args[1:])
 	if !ok {

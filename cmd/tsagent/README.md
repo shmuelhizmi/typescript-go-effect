@@ -263,12 +263,11 @@ shape  (declared: Shape)  src/shapes.ts
 
 ### `perf` — type-system performance insights
 
-Each `perf` command runs a fresh, fully traced compile of the project entirely in memory (no trace files are written to disk), then aggregates the trace, the recorded type descriptors, and the compiler statistics into agent-actionable rankings. The ranking commands default to the user's own files; pass `--include-libs` to fold in bundled libs and `node_modules`.
+Each `perf` command runs a fresh, fully traced compile of the project entirely in memory (no trace files are written to disk), then aggregates the trace, the recorded type descriptors, and the compiler statistics into agent-actionable rankings. The ranking commands default to the user's own files; pass `--include-libs` to fold in bundled libs and `node_modules`. The `perf` family is text-only; for the HTML performance report see [`report perf`](#report--multi-page-html-reports).
 
 | Command | Description | Flags |
 |---|---|---|
 | `perf summary` | Phase budget (parse/bind/check/emit split), project counters, and a one-line bottleneck verdict | `--emit`, `--single-threaded` |
-| `perf report` | Full report: every analysis from one traced compile, with optional standalone HTML export | `--top N` (default 25), `--include-libs`, `--generate-report`, `--out <path>` (default `tsagent-perf-report.html`; implies `--generate-report`), `--emit`, `--single-threaded` |
 | `perf hot-files` | Files ranked by compiler time (parse/bind/check) and recorded type count | `--top N` (default 50), `--include-libs`, `--emit`, `--single-threaded` |
 | `perf hot-types` | Generics/aliases ranked by how many distinct types they instantiate (instantiation spread), with conditional/union signals | `--top N` (default 50), `--include-libs`, `--emit`, `--single-threaded` |
 | `perf hot-checks` | Individual checker operations the tracer sampled as slow (>~10ms), located back to a file | `--top N` (default 50), `--emit`, `--single-threaded` |
@@ -285,6 +284,33 @@ parse 0.012s (9%)  bind 0.004s (3%)  check 0.123s (88%)  emit 0.000s (0%)  total
 types/file 554.7  instantiations/type 1.16  depth-limit hits 0
 verdict: check-dominated — the type system is the bottleneck
 ```
+
+### `report` — multi-page HTML reports
+
+The `report` family renders **self-contained, multi-page HTML** dashboards: one file with all CSS/JS inlined (no network, no external assets), a sidebar that switches between pages, and deep links via `#pageid`. A report is composed of *items*; each item contributes one or more pages. The output is **measurement, not linting** — rankings, distributions, and heatmaps that quantify the codebase, never pass/fail verdicts.
+
+| Command | Description |
+|---|---|
+| `report perf` | The performance report (type-system budget, hot files/types/checks, file-time treemap) — the HTML home of the `perf` data |
+| `report quality` | Semantic analyses: duplicates, complexity, assertions, exhaustiveness, barrel cost, side effects, dependencies (the cheap, curated set) |
+| `report structure` | File/AST size & shape: largest files (+ LOC treemap), comment density (+ heatmap), function metrics (length / nesting / params), per-directory rollups |
+| `report full` | Every group at once (perf + quality + structure) |
+| `report --include a,b,c` | An explicit set of items, e.g. `--include perf,duplicates,file-size` |
+
+Shared flags: `--out <path>` (default `tsagent-report.html`) · `--top N` (rows per ranking table, default 25) · perf-capture knobs `--emit` / `--single-threaded` / `--include-libs` (forwarded to the perf item). The two expensive analyses — `dead-code` and `churn-risk` (project-wide find-all-references; churn also shells to git) — are **opt-in**: add `--include-expensive` to a preset, or name them in `--include`. Unknown `--include` items exit 2 with the list of known items. Per-item failures are non-fatal: the report is still written with the pages that succeeded and the command exits 5 (partial).
+
+Item keys for `--include`: `perf`, `duplicates`, `complexity`, `assertions`, `exhaustiveness`, `barrel-cost`, `side-effects`, `unused-deps`, `dead-code`, `churn-risk`, `file-size`, `comments`, `functions`, `dir-stats`.
+
+```
+$ tsagent report structure --out structure.html
+Structure    File size  (8)
+Structure    Comment density  (8)
+Structure    Function metrics  (16)
+Structure    Directories  (1)
+wrote HTML report: structure.html (4 page(s))
+```
+
+The shared rendering toolkit lives in `internal/tsagent/report` (the `Document`/`Page`/`Section` model and widgets — KPIs, phase bars, ranking tables with meter bars, treemap heatmaps); items map analysis data onto it in `internal/tsagent/cmds/report_*.go`.
 
 ### `refactor` — transactional mutations
 

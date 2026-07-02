@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/typescript-go/internal/tsagent/perf"
+	"github.com/microsoft/typescript-go/internal/tsagent/report"
 )
 
 func gatherFixture(t *testing.T) *perf.Capture {
@@ -142,11 +143,19 @@ func TestPerfReport(t *testing.T) {
 		t.Fatalf("report hot-types missing Box: %v", typeNames(rep.HotTypes))
 	}
 
-	htmlDoc := perf.RenderHTML(rep)
-	for _, want := range []string{"<!DOCTYPE html>", "</html>", "class=\"navlist\"", rep.Summary.Verdict, "Box", "const TREE=", "id=\"treemap\""} {
+	htmlDoc := report.Render(&report.Document{Title: "tsagent report", Pages: perfPages(rep)})
+	for _, want := range []string{
+		"<!DOCTYPE html>", "</html>", "class=\"navlist\"", "class=\"page",
+		rep.Summary.Verdict, "Box",
+		"id=\"treemap-perf-1\"", "tsRenderTreemap(\"treemap-perf-1\"",
+	} {
 		if !strings.Contains(htmlDoc, want) {
 			t.Fatalf("HTML report missing %q", want)
 		}
+	}
+	// The page-switch nav must replace the old scroll-spy.
+	if strings.Contains(htmlDoc, "IntersectionObserver") {
+		t.Fatal("HTML report still uses the single-page scroll-spy")
 	}
 	if strings.Contains(htmlDoc, "persists") {
 		t.Fatal("HTML report contains corrupted CSS token")

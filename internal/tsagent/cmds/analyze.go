@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"maps"
 	"slices"
 	"strings"
@@ -611,10 +612,21 @@ type unusedDepsFlags struct {
 
 // UnusedDepsResult is the `analyze unused-deps` result.
 type UnusedDepsResult struct {
-	PackageJSON string   `json:"packageJson"`
-	UnusedDeps  []string `json:"unusedDeps"`
-	PhantomDeps []string `json:"phantomDeps"`
-	Note        string   `json:"note,omitempty"`
+	PackageJSON string               `json:"packageJson"`
+	UnusedDeps  []string             `json:"unusedDeps"`
+	PhantomDeps []string             `json:"phantomDeps"`
+	BinUsages   []DependencyBinUsage `json:"binUsages,omitempty"`
+	Note        string               `json:"note,omitempty"`
+}
+
+// DependencyBinUsage records non-import evidence that a dependency is used as
+// a CLI tool. It is emitted in JSON output only; text output stays concise.
+type DependencyBinUsage struct {
+	Dependency string `json:"dependency"`
+	Bin        string `json:"bin"`
+	File       string `json:"file"`
+	Line       int    `json:"line"`
+	Source     string `json:"source"`
 }
 
 var _ cli.Texter = (*UnusedDepsResult)(nil)
@@ -674,9 +686,17 @@ func runAnalyzeUnusedDeps(ctx context.Context, ws *core.Workspace, flags *unused
 	}
 
 	imported := collectImportedPackages(ws)
+	binUsages := collectDependencyBinUsages(ws, packageJSONPath, analyzed)
+	usedBins := make(map[string]bool, len(binUsages))
+	for _, usage := range binUsages {
+		usedBins[usage.Dependency] = true
+	}
 
 	used := func(dep string) bool {
 		if imported[dep] {
+			return true
+		}
+		if usedBins[dep] {
 			return true
 		}
 		if base, ok := strings.CutPrefix(dep, "@types/"); ok {
@@ -687,13 +707,15 @@ func runAnalyzeUnusedDeps(ctx context.Context, ws *core.Workspace, flags *unused
 			return imported[base]
 		}
 		// foo is also used when only its types package is imported.
-		return imported[typesPackageNameFor(dep)]
+		typesPkg := typesPackageNameFor(dep)
+		return imported[typesPkg] || usedBins[typesPkg]
 	}
 
 	result := &UnusedDepsResult{
 		PackageJSON: ws.RelPath(packageJSONPath),
 		UnusedDeps:  []string{},
 		PhantomDeps: []string{},
+		BinUsages:   binUsages,
 		Note:        "type-only dependency analysis (deps used only in type positions) is not implemented in v1",
 	}
 	for dep := range analyzed {
@@ -709,6 +731,295 @@ func runAnalyzeUnusedDeps(ctx context.Context, ws *core.Workspace, flags *unused
 	slices.Sort(result.UnusedDeps)
 	slices.Sort(result.PhantomDeps)
 	return result, nil
+}
+
+type packageJSONToolMetadata struct {
+	Bin        json.RawMessage   `json:"bin"`
+	Scripts    map[string]string `json:"scripts"`
+	Workspaces json.RawMessage   `json:"workspaces"`
+}
+
+func collectDependencyBinUsages(ws *core.Workspace, packageJSONPath string, analyzed map[string]bool) []DependencyBinUsage {
+	packageDir := tspath.GetDirectoryPath(packageJSONPath)
+	binToDeps := make(map[string][]string)
+	for dep := range analyzed {
+		for _, bin := range dependencyBinNames(ws, packageDir, dep) {
+			binToDeps[bin] = append(binToDeps[bin], dep)
+		}
+	}
+	if len(binToDeps) == 0 {
+		return nil
+	}
+	for bin := range binToDeps {
+		slices.Sort(binToDeps[bin])
+	}
+
+	scanRoot := dependencyToolScanRoot(ws, packageDir)
+	var usages []DependencyBinUsage
+	seen := make(map[string]bool)
+	_ = ws.FS.WalkDir(scanRoot, func(path string, d iofs.DirEntry, err error) error {
+		if err != nil || d == nil {
+			return nil
+		}
+		name := d.Name()
+		if d.IsDir() {
+			if path != scanRoot && skipToolUsageDir(name) {
+				return iofs.SkipDir
+			}
+			return nil
+		}
+		source := toolUsageSource(name)
+		if source == "" {
+			return nil
+		}
+		content, ok := ws.FS.ReadFile(path)
+		if !ok {
+			return nil
+		}
+		if source == "package-script" {
+			collectPackageScriptBinUsages(ws, path, content, binToDeps, &usages, seen)
+			return nil
+		}
+		collectTextBinUsages(ws, path, content, source, binToDeps, &usages, seen)
+		return nil
+	})
+	slices.SortFunc(usages, func(a, b DependencyBinUsage) int {
+		if c := strings.Compare(a.Dependency, b.Dependency); c != 0 {
+			return c
+		}
+		if c := strings.Compare(a.Bin, b.Bin); c != 0 {
+			return c
+		}
+		if c := strings.Compare(a.File, b.File); c != 0 {
+			return c
+		}
+		if c := a.Line - b.Line; c != 0 {
+			return c
+		}
+		return strings.Compare(a.Source, b.Source)
+	})
+	return usages
+}
+
+func dependencyBinNames(ws *core.Workspace, packageDir string, dep string) []string {
+	content, ok := findInstalledPackageJSON(ws, packageDir, dep)
+	if !ok {
+		return nil
+	}
+	var meta packageJSONToolMetadata
+	if err := json.Unmarshal([]byte(content), &meta); err != nil || len(meta.Bin) == 0 {
+		return nil
+	}
+	var binPath string
+	if err := json.Unmarshal(meta.Bin, &binPath); err == nil {
+		if strings.TrimSpace(binPath) == "" {
+			return nil
+		}
+		return []string{defaultBinName(dep)}
+	}
+	var binMap map[string]json.RawMessage
+	if err := json.Unmarshal(meta.Bin, &binMap); err != nil {
+		return nil
+	}
+	bins := make([]string, 0, len(binMap))
+	for bin, raw := range binMap {
+		if strings.TrimSpace(bin) == "" || string(raw) == "null" {
+			continue
+		}
+		bins = append(bins, bin)
+	}
+	slices.Sort(bins)
+	return bins
+}
+
+func findInstalledPackageJSON(ws *core.Workspace, startDir string, dep string) (string, bool) {
+	for dir := startDir; ; {
+		candidate := tspath.CombinePaths(dir, "node_modules", dep, "package.json")
+		if content, ok := ws.FS.ReadFile(candidate); ok {
+			return content, true
+		}
+		parent := tspath.GetDirectoryPath(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
+}
+
+func defaultBinName(dep string) string {
+	if strings.HasPrefix(dep, "@") {
+		_, name, ok := strings.Cut(dep, "/")
+		if ok {
+			return name
+		}
+	}
+	return dep
+}
+
+func dependencyToolScanRoot(ws *core.Workspace, packageDir string) string {
+	gitRoot := ""
+	for dir := packageDir; ; {
+		if content, ok := ws.FS.ReadFile(tspath.CombinePaths(dir, "package.json")); ok && packageJSONHasWorkspaces(content) {
+			return dir
+		}
+		gitPath := tspath.CombinePaths(dir, ".git")
+		if gitRoot == "" && (ws.FS.DirectoryExists(gitPath) || ws.FS.FileExists(gitPath)) {
+			gitRoot = dir
+		}
+		parent := tspath.GetDirectoryPath(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	if gitRoot != "" {
+		return gitRoot
+	}
+	return packageDir
+}
+
+func packageJSONHasWorkspaces(content string) bool {
+	var meta packageJSONToolMetadata
+	if err := json.Unmarshal([]byte(content), &meta); err != nil {
+		return false
+	}
+	raw := strings.TrimSpace(string(meta.Workspaces))
+	return raw != "" && raw != "null"
+}
+
+func skipToolUsageDir(name string) bool {
+	switch name {
+	case ".git", "node_modules", "dist", "build", "coverage", "testdata":
+		return true
+	default:
+		return false
+	}
+}
+
+func toolUsageSource(name string) string {
+	switch name {
+	case "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock":
+		return ""
+	case "package.json":
+		return "package-script"
+	case "Makefile", "makefile", "GNUmakefile", "justfile":
+		return "task-file"
+	}
+	switch tspath.TryGetExtensionFromPath(name) {
+	case ".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".json", ".jsonc", ".yaml", ".yml", ".sh":
+		return "task-file"
+	default:
+		return ""
+	}
+}
+
+func collectPackageScriptBinUsages(ws *core.Workspace, path string, content string, binToDeps map[string][]string, usages *[]DependencyBinUsage, seen map[string]bool) {
+	var meta packageJSONToolMetadata
+	if err := json.Unmarshal([]byte(content), &meta); err != nil {
+		return
+	}
+	names := slices.Collect(maps.Keys(meta.Scripts))
+	slices.Sort(names)
+	for _, name := range names {
+		line := jsonPropertyLine(content, name)
+		collectLineBinUsages(ws, path, meta.Scripts[name], line, "package-script", binToDeps, usages, seen)
+	}
+}
+
+func collectTextBinUsages(ws *core.Workspace, path string, content string, source string, binToDeps map[string][]string, usages *[]DependencyBinUsage, seen map[string]bool) {
+	configFile := isToolUsageConfigFile(tspath.GetBaseFileName(path))
+	for i, line := range strings.Split(content, "\n") {
+		if configFile && !isToolUsageConfigLine(line) {
+			continue
+		}
+		collectLineBinUsages(ws, path, line, i+1, source, binToDeps, usages, seen)
+	}
+}
+
+func isToolUsageConfigFile(name string) bool {
+	switch tspath.TryGetExtensionFromPath(name) {
+	case ".json", ".jsonc", ".yaml", ".yml":
+		return true
+	default:
+		return false
+	}
+}
+
+func isToolUsageConfigLine(line string) bool {
+	line = strings.ToLower(line)
+	for _, key := range []string{"command", "cmd", "script", "scripts", "args"} {
+		if strings.Contains(line, `"`+key+`"`) || strings.Contains(line, key+":") {
+			return true
+		}
+	}
+	return false
+}
+
+func collectLineBinUsages(ws *core.Workspace, path string, line string, lineNumber int, source string, binToDeps map[string][]string, usages *[]DependencyBinUsage, seen map[string]bool) {
+	for _, token := range toolUsageTokens(line) {
+		deps := binToDeps[token]
+		if len(deps) == 0 {
+			continue
+		}
+		for _, dep := range deps {
+			usage := DependencyBinUsage{
+				Dependency: dep,
+				Bin:        token,
+				File:       ws.RelPath(path),
+				Line:       lineNumber,
+				Source:     source,
+			}
+			key := fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%s", usage.Dependency, usage.Bin, usage.File, usage.Line, usage.Source)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			*usages = append(*usages, usage)
+		}
+	}
+}
+
+func toolUsageTokens(line string) []string {
+	fields := strings.FieldsFunc(line, func(r rune) bool {
+		switch r {
+		case ' ', '\t', '\r', '\n', '"', '\'', '`', '(', ')', '{', '}', '[', ']', ';', '|', '&', '<', '>', ',':
+			return true
+		default:
+			return false
+		}
+	})
+	tokens := make([]string, 0, len(fields))
+	for _, field := range fields {
+		token := normalizeToolUsageToken(field)
+		if token != "" {
+			tokens = append(tokens, token)
+		}
+	}
+	return tokens
+}
+
+func normalizeToolUsageToken(token string) string {
+	token = strings.TrimSpace(token)
+	token = strings.TrimPrefix(token, "./")
+	token = strings.TrimPrefix(token, ".\\")
+	if i := strings.LastIndexAny(token, `/\`); i >= 0 {
+		token = token[i+1:]
+	}
+	token = strings.Trim(token, ":")
+	if strings.HasPrefix(token, "-") || strings.Contains(token, "=") {
+		return ""
+	}
+	return token
+}
+
+func jsonPropertyLine(content string, key string) int {
+	needle := `"` + key + `"`
+	for i, line := range strings.Split(content, "\n") {
+		if strings.Contains(line, needle) {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 // findPackageJSON walks up from the project root looking for package.json.

@@ -5,6 +5,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/microsoft/typescript-go/internal/bundled"
+	tsagentcore "github.com/microsoft/typescript-go/internal/tsagent/core"
+	"github.com/microsoft/typescript-go/internal/vfs/vfstest"
 )
 
 // ---------------------------------------------------------------------------
@@ -296,6 +300,90 @@ export const all = [x, y, z, lib, fs, local];
 	}
 	if !slices.Equal(result.UnusedDeps, []string{"unused-pkg"}) {
 		t.Errorf("unusedDeps without dev = %v, want [unused-pkg]", result.UnusedDeps)
+	}
+}
+
+func TestAnalyzeUnusedDepsBinUsages(t *testing.T) {
+	t.Parallel()
+	files := map[string]any{
+		"/project/package.json": `{
+			"scripts": {
+				"build": "used-tool --flag && string-tool src/index.ts",
+				"check": "myunused-tool"
+			},
+			"devDependencies": {
+				"used-tool": "1.0.0",
+				"string-tool": "1.0.0",
+				"unused-tool": "1.0.0"
+			}
+		}`,
+		"/project/node_modules/used-tool/package.json":   `{"name":"used-tool","bin":{"used-tool":"bin/cli.js"}}`,
+		"/project/node_modules/string-tool/package.json": `{"name":"string-tool","bin":"bin/cli.js"}`,
+		"/project/node_modules/unused-tool/package.json": `{"name":"unused-tool","bin":{"unused-tool":"bin/cli.js"}}`,
+		"/project/.vscode/tasks.json":                    `{"problemMatcher":{"owner":"unused-tool"}}`,
+		"/project/testdata/fixture/tool.json":            `{"command":"unused-tool"}`,
+		"/project/src/index.ts":                          "export const value = 1;\n",
+	}
+	ws := newTestWorkspace(t, files)
+
+	result, err := runAnalyzeUnusedDeps(context.Background(), ws, &unusedDepsFlags{dev: true}, nil)
+	if err != nil {
+		t.Fatalf("runAnalyzeUnusedDeps: %v", err)
+	}
+	if !slices.Equal(result.UnusedDeps, []string{"unused-tool"}) {
+		t.Errorf("unusedDeps = %v, want [unused-tool]", result.UnusedDeps)
+	}
+	wantUsages := []DependencyBinUsage{
+		{Dependency: "string-tool", Bin: "string-tool", File: "package.json", Line: 3, Source: "package-script"},
+		{Dependency: "used-tool", Bin: "used-tool", File: "package.json", Line: 3, Source: "package-script"},
+	}
+	if !slices.Equal(result.BinUsages, wantUsages) {
+		t.Errorf("binUsages = %#v, want %#v", result.BinUsages, wantUsages)
+	}
+}
+
+func TestAnalyzeUnusedDepsBinUsagesScanWorkspaceRoot(t *testing.T) {
+	t.Parallel()
+	if !bundled.Embedded {
+		t.Skip("bundled files are not embedded")
+	}
+	files := map[string]any{
+		"/repo/package.json":                           `{"private":true,"workspaces":["packages/*"]}`,
+		"/repo/Herebyfile.mjs":                         "await $({ cwd: thisExtensionDir })`vsce package --out extension.vsix`;\n",
+		"/repo/node_modules/@vscode/vsce/package.json": `{"name":"@vscode/vsce","bin":{"vsce":"vsce"}}`,
+		"/repo/packages/app/tsconfig.json":             `{"compilerOptions":{"strict":true,"target":"esnext"},"include":["src/**/*"]}`,
+		"/repo/packages/app/package.json": `{
+			"devDependencies": {
+				"@vscode/vsce": "1.0.0",
+				"unused-tool": "1.0.0"
+			}
+		}`,
+		"/repo/packages/app/node_modules/unused-tool/package.json": `{"name":"unused-tool","bin":{"unused-tool":"bin/cli.js"}}`,
+		"/repo/packages/app/src/index.ts":                          "export const value = 1;\n",
+	}
+	fs := bundled.WrapFS(vfstest.FromMap(files, true /*useCaseSensitiveFileNames*/))
+	ws, err := tsagentcore.NewWorkspace(tsagentcore.Options{
+		Project:        "/repo/packages/app",
+		Cwd:            "/repo/packages/app",
+		FS:             fs,
+		SingleThreaded: true,
+	})
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+
+	result, err := runAnalyzeUnusedDeps(context.Background(), ws, &unusedDepsFlags{dev: true}, nil)
+	if err != nil {
+		t.Fatalf("runAnalyzeUnusedDeps: %v", err)
+	}
+	if !slices.Equal(result.UnusedDeps, []string{"unused-tool"}) {
+		t.Errorf("unusedDeps = %v, want [unused-tool]", result.UnusedDeps)
+	}
+	wantUsages := []DependencyBinUsage{
+		{Dependency: "@vscode/vsce", Bin: "vsce", File: "../../Herebyfile.mjs", Line: 1, Source: "task-file"},
+	}
+	if !slices.Equal(result.BinUsages, wantUsages) {
+		t.Errorf("binUsages = %#v, want %#v", result.BinUsages, wantUsages)
 	}
 }
 

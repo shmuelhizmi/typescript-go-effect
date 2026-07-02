@@ -9,7 +9,6 @@ import (
 	"github.com/microsoft/typescript-go/internal/tsagent/cli"
 	"github.com/microsoft/typescript-go/internal/tsagent/core"
 	"github.com/microsoft/typescript-go/internal/tsagent/perf"
-	"github.com/microsoft/typescript-go/internal/tspath"
 )
 
 // captureFlags are shared by every perf command: they control the traced
@@ -19,8 +18,6 @@ type captureFlags struct {
 	singleThreaded bool
 	includeLibs    bool
 	top            int
-	generateReport bool
-	out            string
 }
 
 func (f *captureFlags) register(fs *flag.FlagSet) {
@@ -33,14 +30,6 @@ func (f *captureFlags) register(fs *flag.FlagSet) {
 func (f *captureFlags) registerScoped(fs *flag.FlagSet) {
 	f.register(fs)
 	fs.BoolVar(&f.includeLibs, "include-libs", false, "include bundled lib and node_modules files in the ranking")
-}
-
-// registerReport adds the flags for the combined `perf report` command.
-func (f *captureFlags) registerReport(fs *flag.FlagSet) {
-	f.registerScoped(fs)
-	fs.IntVar(&f.top, "top", 25, "max rows per ranking section (0 = all)")
-	fs.BoolVar(&f.generateReport, "generate-report", false, "also write a standalone HTML report")
-	fs.StringVar(&f.out, "out", "", "HTML report path (default tsagent-perf-report.html); implies --generate-report")
 }
 
 func (f *captureFlags) options() perf.Options {
@@ -72,37 +61,6 @@ func init() {
 				return nil, err
 			}
 			return &SummaryResult{Summary: c.Summary()}, nil
-		},
-	})
-	cli.Register(cli.Command{
-		Family:       "perf",
-		Name:         "report",
-		Summary:      "Full performance report (all analyses) with optional standalone HTML export",
-		NeedsProgram: true,
-		Flags: func(fs *flag.FlagSet) any {
-			f := &captureFlags{}
-			f.registerReport(fs)
-			return f
-		},
-		Run: func(ctx context.Context, ws *core.Workspace, flags any, args []string) (any, error) {
-			f := flags.(*captureFlags)
-			c, err := capture(ctx, ws, f)
-			if err != nil {
-				return nil, err
-			}
-			res := &ReportResult{Report: c.Report(f.includeLibs, f.top)}
-			if f.generateReport || f.out != "" {
-				path := f.out
-				if path == "" {
-					path = "tsagent-perf-report.html"
-				}
-				abs := tspath.GetNormalizedAbsolutePath(path, ws.Cwd)
-				if err := ws.FS.WriteFile(abs, perf.RenderHTML(res.Report)); err != nil {
-					return nil, cli.Errorf(cli.ExitFailed, "write HTML report: %v", err)
-				}
-				res.ReportPath = ws.RelPath(abs)
-			}
-			return res, nil
 		},
 	})
 	cli.Register(cli.Command{
@@ -234,85 +192,6 @@ func (r *SummaryResult) WriteText(w io.Writer) error {
 }
 
 // ---- full report result ----
-
-// ReportResult is the `perf report` result: the full combined report, plus the
-// path of any HTML file written.
-type ReportResult struct {
-	Report     *perf.Report `json:"report"`
-	ReportPath string       `json:"reportPath,omitempty"`
-}
-
-var _ cli.Texter = (*ReportResult)(nil)
-
-func (r *ReportResult) WriteText(w io.Writer) error {
-	rep := r.Report
-	if err := (&SummaryResult{Summary: rep.Summary}).WriteText(w); err != nil {
-		return err
-	}
-
-	if _, err := fmt.Fprintf(w, "\n== depth-limit guards (%d) ==\n", len(rep.DepthLimits)); err != nil {
-		return err
-	}
-	if len(rep.DepthLimits) == 0 {
-		fmt.Fprintln(w, "  none — no pathological type explosions detected")
-	}
-	for _, d := range rep.DepthLimits {
-		loc := d.File
-		if loc == "" {
-			loc = "(unattributed)"
-		}
-		if _, err := fmt.Fprintf(w, "  %s  %s  [%s]\n", d.Name, loc, d.Detail); err != nil {
-			return err
-		}
-	}
-
-	if _, err := fmt.Fprintf(w, "\n== hot files (%d) ==\n", len(rep.HotFiles)); err != nil {
-		return err
-	}
-	for _, f := range rep.HotFiles {
-		if _, err := fmt.Fprintf(w, "  %8.1fms  %s  (parse %.1f bind %.1f check %.1f, types %d)\n",
-			f.TotalMS, f.Path, f.ParseMS, f.BindMS, f.CheckMS, f.Types); err != nil {
-			return err
-		}
-	}
-
-	if _, err := fmt.Fprintf(w, "\n== hot types (%d) ==\n", len(rep.HotTypes)); err != nil {
-		return err
-	}
-	for _, t := range rep.HotTypes {
-		loc := t.File
-		if t.Line > 0 {
-			loc = fmt.Sprintf("%s:%d", t.File, t.Line)
-		}
-		if _, err := fmt.Fprintf(w, "  %6d  %s  %s  (conditional:%d maxUnion:%d)\n",
-			t.Count, t.Symbol, loc, t.Conditional, t.MaxUnion); err != nil {
-			return err
-		}
-	}
-
-	if _, err := fmt.Fprintf(w, "\n== hot checks (%d) ==\n", len(rep.HotChecks)); err != nil {
-		return err
-	}
-	if len(rep.HotChecks) == 0 {
-		fmt.Fprintln(w, "  none sampled — the type system is fast")
-	}
-	for _, c := range rep.HotChecks {
-		loc := c.File
-		if c.Line > 0 {
-			loc = fmt.Sprintf("%s:%d", c.File, c.Line)
-		}
-		if _, err := fmt.Fprintf(w, "  %8.1fms  %s  %s\n", c.DurMS, c.Name, loc); err != nil {
-			return err
-		}
-	}
-
-	if r.ReportPath != "" {
-		if _, err := fmt.Fprintf(w, "\nwrote HTML report: %s\n", r.ReportPath); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
 // ---- hot files result ----
 

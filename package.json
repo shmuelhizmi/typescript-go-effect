@@ -34,7 +34,8 @@
         "extension:watch": "npm run -w _extension watch",
         "convertfourslash": "node --experimental-strip-types --no-warnings internal/fourslash/_scripts/convertFourslash.mts",
         "updatefailing": "node --experimental-strip-types --no-warnings internal/fourslash/_scripts/updateFailing.mts",
-        "makemanual": "node --experimental-strip-types --no-warnings internal/fourslash/_scripts/makeManual.mts"
+        "makemanual": "node --experimental-strip-types --no-warnings internal/fourslash/_scripts/makeManual.mts",
+        "tsagent:release": "node _packages/tsagent/scripts/release.mjs"
     },
     "workspaces": [
         "./_extension",
