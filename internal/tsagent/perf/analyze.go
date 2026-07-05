@@ -27,7 +27,7 @@ type Summary struct {
 
 // Summary computes the phase budget and a short diagnostic verdict.
 func (c *Capture) Summary() *Summary {
-	s := &Summary{Stats: c.Stats, DepthLimitHits: len(c.Instants)}
+	s := &Summary{Stats: c.Stats, DepthLimitHits: c.depthLimitCount()}
 	total := c.Stats.Total.Seconds()
 	if total > 0 {
 		s.ParsePct = pct(c.Stats.Parse.Seconds(), total)
@@ -66,6 +66,13 @@ func (c *Capture) Summary() *Summary {
 		s.Notes = append(s.Notes, fmt.Sprintf("%.0f types/file on average — see `perf hot-files` for where the type system spends its time", s.TypesPerFile))
 	}
 	return s
+}
+
+func (c *Capture) depthLimitCount() int {
+	if c.summaryOnly {
+		return c.depthLimitHits
+	}
+	return len(c.Instants)
 }
 
 // ---- hot files ----

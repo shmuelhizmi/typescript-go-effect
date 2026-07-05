@@ -103,6 +103,9 @@ Changes implemented after the baseline:
   unless `--include-libs` is requested.
 - Perf releases the traced Program before parsing retained trace events; hot-check line
   numbers are resolved lazily from workspace file text.
+- Standalone `perf summary` uses a summary-only capture mode that disables type
+  descriptor recording and skips retained span/ranking data, keeping only compiler stats
+  and depth-limit hit counts.
 
 Measured with the optimized binary (`/tmp/tsagent-opt`) on the same project:
 
@@ -188,6 +191,18 @@ explicit GC inside `perf.Gather`. Compared with the previous no-cadence allocati
 sample (`50.23s`, `6.88 GB` footprint), the direct sink improves both wall time and
 footprint while staying below the cap.
 
+Additional samples after the summary-only `perf summary` capture mode, measured against
+the previous committed binary on the same machine:
+
+| Probe | Previous commit | Current | Change |
+| --- | ---: | ---: | --- |
+| `perf summary` wall | 31.00s | 24.06s | -22% |
+| `perf summary` RSS | 7.08 GB | 6.20 GB | -12% |
+| `perf summary` footprint | 7.28 GB | 6.26 GB | -14% |
+| `report full --top 1` wall | 45.67s | 42.41s | -7% |
+| `report full --top 1` RSS | 6.97 GB | 6.82 GB | -2% |
+| `report full --top 1` footprint | 7.10 GB | 6.84 GB | -4% |
+
 ## Small Iteration Fixture
 
 `testdata/tsagent/benchmark-example-typesystem` is a small TypeScript project intended
@@ -247,6 +262,10 @@ the large full-report sample to `7.90 GB` footprint. With the direct sink in pla
 `perf.Gather` no longer needs explicit GC and measured `6.80 GB` footprint. Retrying
 trace-span aggregation after the descriptor allocation reductions still regressed
 (`8.53 GB` footprint), so normalized spans remain the better measured design for now.
+
+I also tried canonicalizing retained trace span paths and replacing unsampled span names
+with a compact enum. It lowered RSS but regressed the full-report footprint
+(`7.48 GB`), so that candidate was reverted.
 
 The old parallel perf capture remains available through `--parallel-perf`, but it was not
 a good default for this project. A post-change parallel probe was stopped after 343.99s
@@ -347,6 +366,8 @@ Reduce perf report transient memory:
 8. Stream and release perf type descriptors throughout checking, transfer flushed type
    slices instead of cloning them, avoid per-descriptor pointer churn, and aggregate
    descriptors directly so `perf.Gather` stays under the 7 GB target without explicit GC.
+9. Let commands that only need summary counters opt into descriptor-free capture instead
+   of paying for hot-file/hot-type/hot-check ranking data.
 
 Acceptance target:
 
@@ -357,7 +378,7 @@ Acceptance target:
 
 Current result: `report perf --top 1` footprint is down from 43.44 GB to 8.99 GB on the
 target project after the earlier display optimization, and `report full --top 1` is now
-verified at 6.80 GB after direct type-descriptor aggregation and lower-allocation
+verified at 6.84 GB after direct type-descriptor aggregation and lower-allocation
 descriptor construction. This clears the 12 GB target, the requested additional 20-30%
 reduction, and the follow-up 7 GB full report target without explicit GC inside
 `perf.Gather`.

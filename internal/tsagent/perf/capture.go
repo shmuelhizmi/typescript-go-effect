@@ -38,6 +38,9 @@ type Options struct {
 	// IncludeLibs keeps all type-origin aggregations. Default captures only keep
 	// project-owned hot type groups, matching the default reports.
 	IncludeLibs bool
+	// SummaryOnly captures only compiler stats and depth-limit hit counts. It
+	// skips type descriptor recording and retained span data used by rankings.
+	SummaryOnly bool
 }
 
 // Stats holds the project-level compiler counters and phase timings.
@@ -93,6 +96,8 @@ type Capture struct {
 
 	storeAllTypeOrigins bool
 	typesAggregatedLive bool
+	summaryOnly         bool
+	depthLimitHits      int
 	ws                  *core.Workspace
 	program             *compiler.Program
 	canonMap            map[string]string // any path representation -> canonical FileName()
@@ -118,25 +123,27 @@ func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, er
 		return nil, fmt.Errorf("create trace sink: %w", err)
 	}
 	defer traceFS.Cleanup()
-	var hotTypesAll map[string]*hotTypeAgg
-	if opts.IncludeLibs {
-		hotTypesAll = map[string]*hotTypeAgg{}
+	traceOptions := tracing.Options{IncludeTypeDisplay: false}
+	c := &Capture{ws: ws}
+	if opts.SummaryOnly {
+		c.summaryOnly = true
+		traceOptions.DisableTypeDescriptors = true
+	} else {
+		var hotTypesAll map[string]*hotTypeAgg
+		if opts.IncludeLibs {
+			hotTypesAll = map[string]*hotTypeAgg{}
+		}
+		c.typeCounts = map[string]int{}
+		c.typeOrigins = map[uint32]uint32{}
+		c.hotTypesAll = hotTypesAll
+		c.hotTypesProject = map[string]*hotTypeAgg{}
+		c.storeAllTypeOrigins = true
+		c.typesAggregatedLive = true
+		traceOptions.StreamTypeDescriptors = true
+		traceOptions.TypeDescriptorSink = c.consumeTypeDescriptor
+		traceOptions.SkipTypeDescriptorFiles = true
 	}
-	c := &Capture{
-		ws:                  ws,
-		typeCounts:          map[string]int{},
-		typeOrigins:         map[uint32]uint32{},
-		hotTypesAll:         hotTypesAll,
-		hotTypesProject:     map[string]*hotTypeAgg{},
-		storeAllTypeOrigins: true,
-		typesAggregatedLive: true,
-	}
-	tr, err := tracing.StartTracingWithOptions(traceFS, traceDir, ws.ConfigPath, false, tracing.Options{
-		IncludeTypeDisplay:      false,
-		StreamTypeDescriptors:   true,
-		TypeDescriptorSink:      c.consumeTypeDescriptor,
-		SkipTypeDescriptorFiles: true,
-	})
+	tr, err := tracing.StartTracingWithOptions(traceFS, traceDir, ws.ConfigPath, false, traceOptions)
 	if err != nil {
 		return nil, fmt.Errorf("start tracing: %w", err)
 	}
@@ -155,8 +162,10 @@ func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, er
 	program := compiler.NewProgram(programOpts)
 	files := program.SourceFiles()
 	parseDur := time.Since(start)
-	c.program = program
-	c.initCanonMap()
+	if !opts.SummaryOnly {
+		c.program = program
+		c.initCanonMap()
+	}
 
 	// BindSourceFiles emits the per-file "bindSourceFile" trace spans (and only
 	// binds files not yet bound). Run it before the check loop so binding is
@@ -277,6 +286,12 @@ func (c *Capture) parseTraceEvents(fs vfs.FS) error {
 	}
 	defer done()
 	if err := readJSONArray(dec, func(ev traceEnvelopeEvent) error {
+		if c.summaryOnly {
+			if ev.PH == "I" {
+				c.depthLimitHits++
+			}
+			return nil
+		}
 		switch ev.PH {
 		case "B":
 			stacks[ev.TID] = append(stacks[ev.TID], openEvent{name: ev.Name, ts: ev.TS, ev: ev})

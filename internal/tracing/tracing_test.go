@@ -174,6 +174,33 @@ func TestStreamedTypeDescriptorSinkCanSkipTypeFiles(t *testing.T) {
 	assert.Assert(t, !ok, "types file should be skipped")
 }
 
+func TestTypeDescriptorsCanBeDisabled(t *testing.T) {
+	t.Parallel()
+
+	fsys := vfstest.FromMap(fstest.MapFS{
+		"/trace": &fstest.MapFile{Mode: fs.ModeDir},
+	}, true)
+
+	tr, err := StartTracingWithOptions(fsys, "/trace", "", true /*deterministic*/, Options{
+		DisableTypeDescriptors: true,
+		IncludeTypeDisplay:     false,
+	})
+	assert.NilError(t, err)
+	tracer := tr.NewTypeTracer(0)
+	tracer.RecordType(testTracedType{id: 1, display: "display text"})
+
+	assert.NilError(t, tr.FlushTypeDescriptors())
+	assert.Equal(t, len(tr.tracers), 0)
+
+	assert.NilError(t, tr.StopTracing())
+	_, ok := fsys.ReadFile("/trace/types_0.json")
+	assert.Assert(t, !ok, "types file should not be written")
+	legendText, ok := fsys.ReadFile("/trace/legend.json")
+	assert.Assert(t, ok)
+	assert.Assert(t, strings.Contains(legendText, `"tracePath"`))
+	assert.Assert(t, !strings.Contains(legendText, `"typesPath"`))
+}
+
 func TestStreamedTypeDescriptorsRejectDisplayStrings(t *testing.T) {
 	t.Parallel()
 

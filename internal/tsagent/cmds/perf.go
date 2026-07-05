@@ -59,9 +59,12 @@ func init() {
 			return f
 		},
 		Run: func(ctx context.Context, ws *core.Workspace, flags any, args []string) (any, error) {
-			c, err := capture(ctx, ws, flags.(*captureFlags))
+			f := flags.(*captureFlags)
+			opts := f.options()
+			opts.SummaryOnly = true
+			c, err := perf.Gather(ctx, ws, opts)
 			if err != nil {
-				return nil, err
+				return nil, cli.Errorf(cli.ExitFailed, "perf capture failed: %v", err)
 			}
 			return &SummaryResult{Summary: c.Summary()}, nil
 		},

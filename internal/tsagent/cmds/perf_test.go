@@ -57,6 +57,31 @@ func TestPerfSummary(t *testing.T) {
 	}
 }
 
+func TestPerfSummaryOnlySkipsRankingData(t *testing.T) {
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/index.ts": `
+export interface Box<T> { value: T }
+export const value: Box<string> = { value: "ok" };
+`,
+	})
+	c, err := perf.Gather(context.Background(), ws, perf.Options{SingleThreaded: true, SummaryOnly: true})
+	if err != nil {
+		t.Fatalf("Gather summary-only: %v", err)
+	}
+	if c.Summary().Stats.Types == 0 {
+		t.Fatal("summary-only capture should still collect compiler stats")
+	}
+	if got := c.HotFiles(false); len(got) != 0 {
+		t.Fatalf("summary-only capture retained hot files: %v", paths(got))
+	}
+	if got := c.HotTypes(false); len(got) != 0 {
+		t.Fatalf("summary-only capture retained hot types: %v", typeNames(got))
+	}
+	if got := c.HotChecks(); len(got) != 0 {
+		t.Fatalf("summary-only capture retained hot checks: %#v", got)
+	}
+}
+
 func TestPerfHotFilesScoping(t *testing.T) {
 	c := gatherFixture(t)
 

@@ -92,6 +92,10 @@ type Options struct {
 	// SkipTypeDescriptorFiles omits types_N.json output when TypeDescriptorSink
 	// receives all streamed descriptors.
 	SkipTypeDescriptorFiles bool
+	// DisableTypeDescriptors records trace events but ignores checker type
+	// descriptors entirely. This is for callers that only need compiler phase
+	// timings or other trace events, not hot-type attribution.
+	DisableTypeDescriptors bool
 }
 
 type traceEvent struct {
@@ -147,6 +151,7 @@ type Tracing struct {
 	metadataTS              float64
 	deterministic           bool // when true, use monotonic counter instead of real time
 	includeTypeDisplay      bool
+	disableTypeDescriptors  bool
 	streamTypeDescriptors   bool
 	typeDescriptorSink      func(TypeDescriptor) error
 	skipTypeDescriptorFiles bool
@@ -187,6 +192,14 @@ func StartTracingWithOptions(fs vfs.FS, traceDir string, configFilePath string, 
 	if opts.StreamTypeDescriptors && opts.IncludeTypeDisplay {
 		return nil, fmt.Errorf("streaming type descriptors cannot include type display strings")
 	}
+	if opts.DisableTypeDescriptors {
+		if opts.StreamTypeDescriptors {
+			return nil, fmt.Errorf("disabled type descriptors cannot be streamed")
+		}
+		if opts.TypeDescriptorSink != nil {
+			return nil, fmt.Errorf("disabled type descriptors cannot use a descriptor sink")
+		}
+	}
 	if opts.SkipTypeDescriptorFiles {
 		if !opts.StreamTypeDescriptors {
 			return nil, fmt.Errorf("skipping type descriptor files requires streaming type descriptors")
@@ -206,6 +219,7 @@ func StartTracingWithOptions(fs vfs.FS, traceDir string, configFilePath string, 
 		threadKeys:              make(map[int]traceThreadKey),
 		deterministic:           deterministic,
 		includeTypeDisplay:      opts.IncludeTypeDisplay,
+		disableTypeDescriptors:  opts.DisableTypeDescriptors,
 		streamTypeDescriptors:   opts.StreamTypeDescriptors,
 		typeDescriptorSink:      opts.TypeDescriptorSink,
 		skipTypeDescriptorFiles: opts.SkipTypeDescriptorFiles,
@@ -465,6 +479,15 @@ func (tr *Tracing) NewTypeTracer(checkerIndex int) Tracer {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 
+	if tr.disableTypeDescriptors {
+		tr.legend = append(tr.legend, TraceRecord{
+			ConfigFilePath: tr.configFilePath,
+			TracePath:      tr.tracePath,
+			CheckerID:      checkerIndex,
+		})
+		return noopTypeTracer{}
+	}
+
 	typesPath := tspath.CombinePaths(tr.traceDir, fmt.Sprintf("types_%d.json", checkerIndex))
 	if tr.skipTypeDescriptorFiles {
 		typesPath = ""
@@ -566,6 +589,11 @@ type typeTracer struct {
 	typeFlushErr            error
 	mu                      sync.Mutex
 }
+
+type noopTypeTracer struct{}
+
+func (noopTypeTracer) RecordType(TracedType) {}
+func (noopTypeTracer) DumpTypes() error      { return nil }
 
 func (t *typeTracer) RecordType(typ TracedType) {
 	t.mu.Lock()
