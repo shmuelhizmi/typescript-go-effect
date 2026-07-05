@@ -92,10 +92,10 @@ Changes implemented after the baseline:
   until `StopTracing`.
 - `tsagent` perf capture now consumes streamed descriptors through a direct sink and skips
   `types_N.json` output entirely; normal trace output still writes descriptor files.
-- Perf capture no longer uses the check-loop GC cadence that first brought `report full`
-  under 7 GB. The streamed type flush now takes ownership of its retained slice instead
-  of cloning it, and type descriptors use value fields for optional numeric IDs and
-  location line/character pairs to avoid per-descriptor pointer churn.
+- Perf capture no longer uses explicit GC inside `perf.Gather`. The streamed type flush
+  now takes ownership of its retained slice instead of cloning it, and type descriptors
+  use value fields for optional numeric IDs and location line/character pairs to avoid
+  per-descriptor pointer churn.
 - Direct descriptor aggregation interns declaration origins into a compact table so hot
   check attribution can avoid the type JSON round-trip without storing a full
   `(file,line)` pair per type ID.
@@ -174,17 +174,17 @@ formatting descriptor display strings. The perf report does not render `display`
 remaining fields still cover summary, hot files, hot types, hot checks, and depth limits.
 
 Additional samples after chunked type-descriptor streaming, lower-allocation descriptor
-construction, and the direct descriptor sink, without the check-loop GC cadence:
+construction, and the direct descriptor sink, with no explicit GC inside `perf.Gather`:
 
 | Probe | Prior optimized | Current | Change |
 | --- | ---: | ---: | --- |
-| `report full --top 1` wall | 42.96s | 48.24s | +12% |
-| `report full --top 1` RSS | 9.86 GB | 6.62 GB | -33% |
-| `report full --top 1` footprint | 9.87 GB | 6.68 GB | -32% |
+| `report full --top 1` wall | 42.96s | 40.68s | -5% |
+| `report full --top 1` RSS | 9.86 GB | 6.76 GB | -31% |
+| `report full --top 1` footprint | 9.87 GB | 6.80 GB | -31% |
 
 The removed GC cadence measured lower (`5.71 GB` footprint at a 1024-file interval), but
 the committed allocation reductions and direct sink keep the target below 7 GB without
-forcing GC during the check loop. Compared with the previous no-cadence allocation-only
+explicit GC inside `perf.Gather`. Compared with the previous no-cadence allocation-only
 sample (`50.23s`, `6.88 GB` footprint), the direct sink improves both wall time and
 footprint while staying below the cap.
 
@@ -242,12 +242,11 @@ I also tried detaching the type-tracer snapshot slice while dumping descriptors.
 slightly reduced RSS but worsened the report footprint sample (`14.18 GB` versus
 `13.97 GB` for chunked type writes alone), so that tweak was reverted.
 
-Removing every forced GC inside perf capture, including the phase-boundary collections
-after dropping the traced program, regressed the large full-report sample to `7.90 GB`
-footprint. Retrying trace-span aggregation after the descriptor allocation reductions
-also regressed (`8.53 GB` footprint). The committed change removes the check-loop GC
-cadence while keeping the phase-boundary cleanup that separates compiler lifetime from
-trace/report aggregation.
+Before the direct descriptor sink, removing every forced GC inside perf capture regressed
+the large full-report sample to `7.90 GB` footprint. With the direct sink in place,
+`perf.Gather` no longer needs explicit GC and measured `6.80 GB` footprint. Retrying
+trace-span aggregation after the descriptor allocation reductions still regressed
+(`8.53 GB` footprint), so normalized spans remain the better measured design for now.
 
 The old parallel perf capture remains available through `--parallel-perf`, but it was not
 a good default for this project. A post-change parallel probe was stopped after 343.99s
@@ -346,8 +345,8 @@ Reduce perf report transient memory:
 7. Skip type descriptor display strings for `tsagent` perf capture because the report
    does not render them.
 8. Stream and release perf type descriptors throughout checking, transfer flushed type
-   slices instead of cloning them, and avoid per-descriptor pointer churn to keep
-   full-report footprint under the 7 GB target without a check-loop GC cadence.
+   slices instead of cloning them, avoid per-descriptor pointer churn, and aggregate
+   descriptors directly so `perf.Gather` stays under the 7 GB target without explicit GC.
 
 Acceptance target:
 
@@ -358,9 +357,10 @@ Acceptance target:
 
 Current result: `report perf --top 1` footprint is down from 43.44 GB to 8.99 GB on the
 target project after the earlier display optimization, and `report full --top 1` is now
-verified at 6.68 GB after direct type-descriptor aggregation and lower-allocation
+verified at 6.80 GB after direct type-descriptor aggregation and lower-allocation
 descriptor construction. This clears the 12 GB target, the requested additional 20-30%
-reduction, and the follow-up 7 GB full report target without a check-loop GC cadence.
+reduction, and the follow-up 7 GB full report target without explicit GC inside
+`perf.Gather`.
 
 ### Phase 5: Full Report Guardrails
 

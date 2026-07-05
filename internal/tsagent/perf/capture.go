@@ -189,8 +189,6 @@ func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, er
 	tr = nil
 
 	var mem runtime.MemStats
-	runtime.GC()
-	runtime.GC()
 	runtime.ReadMemStats(&mem)
 
 	c.Stats = Stats{
@@ -214,13 +212,9 @@ func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, er
 	host = nil
 	programOpts.Host = nil
 	programOpts.Tracing = nil
-	runtime.GC()
-	runtime.GC()
 	if err := c.parseTraceEvents(traceFS); err != nil {
 		return nil, err
 	}
-	runtime.GC()
-	runtime.GC()
 	if !c.typesAggregatedLive {
 		if err := c.parseTraceTypes(traceFS); err != nil {
 			return nil, err
