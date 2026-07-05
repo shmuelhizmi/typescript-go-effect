@@ -290,7 +290,8 @@ func (c *Capture) fileOfTypeArgs(args traceArgs) string {
 		if id == 0 {
 			continue
 		}
-		if origin, ok := c.typeOrigins[id]; ok {
+		if idx, ok := c.typeOrigins[id]; ok && idx > 0 && int(idx) <= len(c.originTable) {
+			origin := c.originTable[idx-1]
 			return c.display(origin.canon)
 		}
 	}

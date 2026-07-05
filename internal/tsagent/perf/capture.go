@@ -85,14 +85,18 @@ type Capture struct {
 
 	typeCounts      map[string]int // canonical file path -> recorded type count
 	typeOriginIDs   map[uint32]struct{}
-	typeOrigins     map[uint32]typeOrigin
+	typeOrigins     map[uint32]uint32 // type id -> 1-based originTable index
+	originTable     []typeOrigin
+	originIndex     map[typeOrigin]uint32 // origin -> 1-based originTable index
 	hotTypesAll     map[string]*hotTypeAgg
 	hotTypesProject map[string]*hotTypeAgg
 
-	ws         *core.Workspace
-	program    *compiler.Program
-	canonMap   map[string]string // any path representation -> canonical FileName()
-	lineStarts map[string]tscore.ECMALineStarts
+	storeAllTypeOrigins bool
+	typesAggregatedLive bool
+	ws                  *core.Workspace
+	program             *compiler.Program
+	canonMap            map[string]string // any path representation -> canonical FileName()
+	lineStarts          map[string]tscore.ECMALineStarts
 }
 
 type typeOrigin struct {
@@ -114,9 +118,24 @@ func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, er
 		return nil, fmt.Errorf("create trace sink: %w", err)
 	}
 	defer traceFS.Cleanup()
+	var hotTypesAll map[string]*hotTypeAgg
+	if opts.IncludeLibs {
+		hotTypesAll = map[string]*hotTypeAgg{}
+	}
+	c := &Capture{
+		ws:                  ws,
+		typeCounts:          map[string]int{},
+		typeOrigins:         map[uint32]uint32{},
+		hotTypesAll:         hotTypesAll,
+		hotTypesProject:     map[string]*hotTypeAgg{},
+		storeAllTypeOrigins: true,
+		typesAggregatedLive: true,
+	}
 	tr, err := tracing.StartTracingWithOptions(traceFS, traceDir, ws.ConfigPath, false, tracing.Options{
-		IncludeTypeDisplay:    false,
-		StreamTypeDescriptors: true,
+		IncludeTypeDisplay:      false,
+		StreamTypeDescriptors:   true,
+		TypeDescriptorSink:      c.consumeTypeDescriptor,
+		SkipTypeDescriptorFiles: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start tracing: %w", err)
@@ -136,6 +155,8 @@ func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, er
 	program := compiler.NewProgram(programOpts)
 	files := program.SourceFiles()
 	parseDur := time.Since(start)
+	c.program = program
+	c.initCanonMap()
 
 	// BindSourceFiles emits the per-file "bindSourceFile" trace spans (and only
 	// binds files not yet bound). Run it before the check loop so binding is
@@ -172,35 +193,21 @@ func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, er
 	runtime.GC()
 	runtime.ReadMemStats(&mem)
 
-	var hotTypesAll map[string]*hotTypeAgg
-	if opts.IncludeLibs {
-		hotTypesAll = map[string]*hotTypeAgg{}
+	c.Stats = Stats{
+		Files:          len(files),
+		Lines:          program.LineCount(),
+		Identifiers:    program.IdentifierCount(),
+		Symbols:        program.SymbolCount(),
+		Types:          program.TypeCount(),
+		Instantiations: program.InstantiationCount(),
+		MemoryUsed:     mem.Alloc,
+		MemoryAllocs:   mem.Mallocs,
+		Parse:          parseDur,
+		Bind:           bindDur,
+		Check:          checkDur,
+		Emit:           emitDur,
+		Total:          parseDur + bindDur + checkDur + emitDur,
 	}
-	c := &Capture{
-		ws:              ws,
-		program:         program,
-		typeCounts:      map[string]int{},
-		typeOriginIDs:   map[uint32]struct{}{},
-		typeOrigins:     map[uint32]typeOrigin{},
-		hotTypesAll:     hotTypesAll,
-		hotTypesProject: map[string]*hotTypeAgg{},
-		Stats: Stats{
-			Files:          len(files),
-			Lines:          program.LineCount(),
-			Identifiers:    program.IdentifierCount(),
-			Symbols:        program.SymbolCount(),
-			Types:          program.TypeCount(),
-			Instantiations: program.InstantiationCount(),
-			MemoryUsed:     mem.Alloc,
-			MemoryAllocs:   mem.Mallocs,
-			Parse:          parseDur,
-			Bind:           bindDur,
-			Check:          checkDur,
-			Emit:           emitDur,
-			Total:          parseDur + bindDur + checkDur + emitDur,
-		},
-	}
-	c.initCanonMap()
 	c.program = nil
 	program = nil
 	files = nil
@@ -214,10 +221,13 @@ func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, er
 	}
 	runtime.GC()
 	runtime.GC()
-	if err := c.parseTraceTypes(traceFS); err != nil {
-		return nil, err
+	if !c.typesAggregatedLive {
+		if err := c.parseTraceTypes(traceFS); err != nil {
+			return nil, err
+		}
 	}
 	c.typeOriginIDs = nil
+	c.originIndex = nil
 	return c, nil
 }
 
@@ -289,20 +299,27 @@ func (c *Capture) parseTraceEvents(fs vfs.FS) error {
 		case "X":
 			if ev.Dur != nil {
 				sp := c.spanFrom(ev, *ev.Dur, true)
-				if sp.Path == "" {
+				if sp.Path == "" && !c.storeAllTypeOrigins {
 					c.recordTypeOriginIDs(ev.Args)
 				}
 				c.Spans = append(c.Spans, sp)
 			}
 		case "I":
 			c.Instants = append(c.Instants, Instant{Phase: ev.Cat, Name: ev.Name, Args: ev.Args})
-			c.recordTypeOriginIDs(ev.Args)
+			if !c.storeAllTypeOrigins {
+				c.recordTypeOriginIDs(ev.Args)
+			}
 		}
 		return nil
 	}); err != nil {
 		return fmt.Errorf("perf: parse trace: %w", err)
 	}
 	fs.Remove(traceDir + "/trace.json")
+	return nil
+}
+
+func (c *Capture) consumeTypeDescriptor(desc tracing.TypeDescriptor) error {
+	c.recordTypeDescriptor(&desc)
 	return nil
 }
 
@@ -348,8 +365,8 @@ func (c *Capture) recordTypeDescriptor(desc *tracing.TypeDescriptor) {
 		if desc.FirstDeclaration.Start.Line > 0 {
 			o.line = desc.FirstDeclaration.Start.Line
 		}
-		if _, needed := c.typeOriginIDs[desc.ID]; needed {
-			c.typeOrigins[desc.ID] = o
+		if _, needed := c.typeOriginIDs[desc.ID]; needed || c.storeAllTypeOrigins {
+			c.recordTypeOrigin(desc.ID, o)
 		}
 		c.typeCounts[canon]++
 		origin = &o
@@ -368,6 +385,19 @@ func (c *Capture) recordTypeDescriptor(desc *tracing.TypeDescriptor) {
 	if origin != nil && c.inProject(origin.canon) {
 		c.recordHotType(c.hotTypesProject, name, desc, origin)
 	}
+}
+
+func (c *Capture) recordTypeOrigin(id uint32, origin typeOrigin) {
+	if c.originIndex == nil {
+		c.originIndex = map[typeOrigin]uint32{}
+	}
+	idx := c.originIndex[origin]
+	if idx == 0 {
+		idx = uint32(len(c.originTable) + 1)
+		c.originIndex[origin] = idx
+		c.originTable = append(c.originTable, origin)
+	}
+	c.typeOrigins[id] = idx
 }
 
 func (c *Capture) recordHotType(m map[string]*hotTypeAgg, name string, desc *tracing.TypeDescriptor, origin *typeOrigin) {

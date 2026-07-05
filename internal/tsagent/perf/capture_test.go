@@ -11,7 +11,7 @@ func TestRecordTypeDescriptorStoresOnlyNeededOrigins(t *testing.T) {
 	c := &Capture{
 		typeCounts:      map[string]int{},
 		typeOriginIDs:   map[uint32]struct{}{1: {}},
-		typeOrigins:     map[uint32]typeOrigin{},
+		typeOrigins:     map[uint32]uint32{},
 		hotTypesAll:     map[string]*hotTypeAgg{},
 		hotTypesProject: map[string]*hotTypeAgg{},
 	}
@@ -51,7 +51,7 @@ func TestRecordTypeDescriptorCanSkipAllHotTypes(t *testing.T) {
 	c := &Capture{
 		typeCounts:      map[string]int{},
 		typeOriginIDs:   map[uint32]struct{}{},
-		typeOrigins:     map[uint32]typeOrigin{},
+		typeOrigins:     map[uint32]uint32{},
 		hotTypesProject: map[string]*hotTypeAgg{},
 	}
 

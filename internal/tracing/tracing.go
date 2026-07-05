@@ -86,6 +86,12 @@ type Options struct {
 	// of retaining TracedType references until StopTracing. It is only supported
 	// when IncludeTypeDisplay is false, because Display() can re-enter the checker.
 	StreamTypeDescriptors bool
+	// TypeDescriptorSink receives streamed type descriptors directly. It lets
+	// callers aggregate descriptor data without writing and reading types_N.json.
+	TypeDescriptorSink func(TypeDescriptor) error
+	// SkipTypeDescriptorFiles omits types_N.json output when TypeDescriptorSink
+	// receives all streamed descriptors.
+	SkipTypeDescriptorFiles bool
 }
 
 type traceEvent struct {
@@ -128,23 +134,25 @@ const typeFlushThreshold = 8 * 1024 * 1024
 
 // Tracing manages the overall tracing session including all checkers
 type Tracing struct {
-	fs                    vfs.FS
-	traceDir              string
-	tracePath             string
-	configFilePath        string
-	legend                []TraceRecord
-	tracers               []*typeTracer
-	traceContent          strings.Builder
-	traceStarted          atomic.Bool
-	threadIDs             map[traceThreadKey]int
-	threadKeys            map[int]traceThreadKey
-	metadataTS            float64
-	deterministic         bool // when true, use monotonic counter instead of real time
-	includeTypeDisplay    bool
-	streamTypeDescriptors bool
-	timestampCounter      uint64 // only used in deterministic mode
-	startTime             time.Time
-	mu                    sync.Mutex
+	fs                      vfs.FS
+	traceDir                string
+	tracePath               string
+	configFilePath          string
+	legend                  []TraceRecord
+	tracers                 []*typeTracer
+	traceContent            strings.Builder
+	traceStarted            atomic.Bool
+	threadIDs               map[traceThreadKey]int
+	threadKeys              map[int]traceThreadKey
+	metadataTS              float64
+	deterministic           bool // when true, use monotonic counter instead of real time
+	includeTypeDisplay      bool
+	streamTypeDescriptors   bool
+	typeDescriptorSink      func(TypeDescriptor) error
+	skipTypeDescriptorFiles bool
+	timestampCounter        uint64 // only used in deterministic mode
+	startTime               time.Time
+	mu                      sync.Mutex
 	// flushErr holds the first error encountered while appending the trace buffer
 	// to disk. Once set, subsequent flushes become no-ops and the error is
 	// surfaced from StopTracing so that transient I/O failures (disk full,
@@ -179,19 +187,29 @@ func StartTracingWithOptions(fs vfs.FS, traceDir string, configFilePath string, 
 	if opts.StreamTypeDescriptors && opts.IncludeTypeDisplay {
 		return nil, fmt.Errorf("streaming type descriptors cannot include type display strings")
 	}
+	if opts.SkipTypeDescriptorFiles {
+		if !opts.StreamTypeDescriptors {
+			return nil, fmt.Errorf("skipping type descriptor files requires streaming type descriptors")
+		}
+		if opts.TypeDescriptorSink == nil {
+			return nil, fmt.Errorf("skipping type descriptor files requires a type descriptor sink")
+		}
+	}
 	tr := &Tracing{
-		fs:                    fs,
-		traceDir:              traceDir,
-		tracePath:             tspath.CombinePaths(traceDir, traceFileName),
-		configFilePath:        configFilePath,
-		legend:                []TraceRecord{},
-		tracers:               []*typeTracer{},
-		threadIDs:             make(map[traceThreadKey]int),
-		threadKeys:            make(map[int]traceThreadKey),
-		deterministic:         deterministic,
-		includeTypeDisplay:    opts.IncludeTypeDisplay,
-		streamTypeDescriptors: opts.StreamTypeDescriptors,
-		startTime:             time.Now(),
+		fs:                      fs,
+		traceDir:                traceDir,
+		tracePath:               tspath.CombinePaths(traceDir, traceFileName),
+		configFilePath:          configFilePath,
+		legend:                  []TraceRecord{},
+		tracers:                 []*typeTracer{},
+		threadIDs:               make(map[traceThreadKey]int),
+		threadKeys:              make(map[int]traceThreadKey),
+		deterministic:           deterministic,
+		includeTypeDisplay:      opts.IncludeTypeDisplay,
+		streamTypeDescriptors:   opts.StreamTypeDescriptors,
+		typeDescriptorSink:      opts.TypeDescriptorSink,
+		skipTypeDescriptorFiles: opts.SkipTypeDescriptorFiles,
+		startTime:               time.Now(),
 	}
 	tr.traceStarted.Store(true)
 
@@ -448,13 +466,18 @@ func (tr *Tracing) NewTypeTracer(checkerIndex int) Tracer {
 	defer tr.mu.Unlock()
 
 	typesPath := tspath.CombinePaths(tr.traceDir, fmt.Sprintf("types_%d.json", checkerIndex))
+	if tr.skipTypeDescriptorFiles {
+		typesPath = ""
+	}
 	tracer := &typeTracer{
-		fs:                 tr.fs,
-		checkerIndex:       checkerIndex,
-		typesPath:          typesPath,
-		includeTypeDisplay: tr.includeTypeDisplay,
-		streamDescriptors:  tr.streamTypeDescriptors,
-		types:              []TracedType{},
+		fs:                      tr.fs,
+		checkerIndex:            checkerIndex,
+		typesPath:               typesPath,
+		includeTypeDisplay:      tr.includeTypeDisplay,
+		streamDescriptors:       tr.streamTypeDescriptors,
+		descriptorSink:          tr.typeDescriptorSink,
+		skipTypeDescriptorFiles: tr.skipTypeDescriptorFiles,
+		types:                   []TracedType{},
 	}
 	tr.tracers = append(tr.tracers, tracer)
 	tr.legend = append(tr.legend, TraceRecord{
@@ -530,16 +553,18 @@ func (tr *Tracing) StopTracing() error {
 
 // typeTracer is the per-checker tracer implementation
 type typeTracer struct {
-	fs                 vfs.FS
-	checkerIndex       int
-	typesPath          string
-	includeTypeDisplay bool
-	streamDescriptors  bool
-	types              []TracedType
-	typeContent        strings.Builder
-	typeCount          int
-	typeFlushErr       error
-	mu                 sync.Mutex
+	fs                      vfs.FS
+	checkerIndex            int
+	typesPath               string
+	includeTypeDisplay      bool
+	streamDescriptors       bool
+	descriptorSink          func(TypeDescriptor) error
+	skipTypeDescriptorFiles bool
+	types                   []TracedType
+	typeContent             strings.Builder
+	typeCount               int
+	typeFlushErr            error
+	mu                      sync.Mutex
 }
 
 func (t *typeTracer) RecordType(typ TracedType) {
@@ -552,6 +577,15 @@ func (t *typeTracer) writeTypeDescriptor(descriptor TypeDescriptor, id uint32) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.typeFlushErr != nil {
+		return
+	}
+	if t.descriptorSink != nil {
+		if err := t.descriptorSink(descriptor); err != nil {
+			t.typeFlushErr = fmt.Errorf("failed to consume type %d: %w", id, err)
+			return
+		}
+	}
+	if t.skipTypeDescriptorFiles {
 		return
 	}
 	if t.typeCount == 0 {
@@ -675,6 +709,9 @@ func (t *typeTracer) finishStreamedTypes() error {
 	if t.typeFlushErr != nil {
 		t.typeContent.Reset()
 		return t.typeFlushErr
+	}
+	if t.skipTypeDescriptorFiles {
+		return nil
 	}
 	if t.typeCount == 0 {
 		return nil
