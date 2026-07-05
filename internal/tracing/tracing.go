@@ -76,6 +76,14 @@ type TraceRecord struct {
 	CheckerID      int    `json:"checkerId"`
 }
 
+// Options controls optional trace output details.
+type Options struct {
+	// IncludeTypeDisplay records display strings in types_N.json. This preserves
+	// the normal --generateTrace shape, but callers that only need type IDs,
+	// flags, and declarations can disable it to avoid expensive TypeToString work.
+	IncludeTypeDisplay bool
+}
+
 type traceEvent struct {
 	PID  int            `json:"pid"`
 	TID  int            `json:"tid"`
@@ -109,23 +117,29 @@ var traceThreadArgKeys = [...]string{"path", "fileName", "containingFileName", "
 // avoiding a syscall per event.
 const flushThreshold = 256 * 1024
 
+// typeFlushThreshold is larger because type descriptor files are written in a
+// tight single-threaded dump loop; a larger buffer keeps syscall overhead down
+// while still avoiding the previous full-file string builder.
+const typeFlushThreshold = 8 * 1024 * 1024
+
 // Tracing manages the overall tracing session including all checkers
 type Tracing struct {
-	fs               vfs.FS
-	traceDir         string
-	tracePath        string
-	configFilePath   string
-	legend           []TraceRecord
-	tracers          []*typeTracer
-	traceContent     strings.Builder
-	traceStarted     atomic.Bool
-	threadIDs        map[traceThreadKey]int
-	threadKeys       map[int]traceThreadKey
-	metadataTS       float64
-	deterministic    bool   // when true, use monotonic counter instead of real time
-	timestampCounter uint64 // only used in deterministic mode
-	startTime        time.Time
-	mu               sync.Mutex
+	fs                 vfs.FS
+	traceDir           string
+	tracePath          string
+	configFilePath     string
+	legend             []TraceRecord
+	tracers            []*typeTracer
+	traceContent       strings.Builder
+	traceStarted       atomic.Bool
+	threadIDs          map[traceThreadKey]int
+	threadKeys         map[int]traceThreadKey
+	metadataTS         float64
+	deterministic      bool // when true, use monotonic counter instead of real time
+	includeTypeDisplay bool
+	timestampCounter   uint64 // only used in deterministic mode
+	startTime          time.Time
+	mu                 sync.Mutex
 	// flushErr holds the first error encountered while appending the trace buffer
 	// to disk. Once set, subsequent flushes become no-ops and the error is
 	// surfaced from StopTracing so that transient I/O failures (disk full,
@@ -150,17 +164,25 @@ const (
 // When deterministic is true, timestamps use a monotonic counter instead of
 // real wall-clock time, producing stable output for test baselines.
 func StartTracing(fs vfs.FS, traceDir string, configFilePath string, deterministic bool) (*Tracing, error) {
+	return StartTracingWithOptions(fs, traceDir, configFilePath, deterministic, Options{IncludeTypeDisplay: true})
+}
+
+// StartTracingWithOptions creates a new tracing session with optional output
+// controls. Most callers should use StartTracing to preserve default trace
+// contents.
+func StartTracingWithOptions(fs vfs.FS, traceDir string, configFilePath string, deterministic bool, opts Options) (*Tracing, error) {
 	tr := &Tracing{
-		fs:             fs,
-		traceDir:       traceDir,
-		tracePath:      tspath.CombinePaths(traceDir, traceFileName),
-		configFilePath: configFilePath,
-		legend:         []TraceRecord{},
-		tracers:        []*typeTracer{},
-		threadIDs:      make(map[traceThreadKey]int),
-		threadKeys:     make(map[int]traceThreadKey),
-		deterministic:  deterministic,
-		startTime:      time.Now(),
+		fs:                 fs,
+		traceDir:           traceDir,
+		tracePath:          tspath.CombinePaths(traceDir, traceFileName),
+		configFilePath:     configFilePath,
+		legend:             []TraceRecord{},
+		tracers:            []*typeTracer{},
+		threadIDs:          make(map[traceThreadKey]int),
+		threadKeys:         make(map[int]traceThreadKey),
+		deterministic:      deterministic,
+		includeTypeDisplay: opts.IncludeTypeDisplay,
+		startTime:          time.Now(),
 	}
 	tr.traceStarted.Store(true)
 
@@ -418,10 +440,11 @@ func (tr *Tracing) NewTypeTracer(checkerIndex int) Tracer {
 
 	typesPath := tspath.CombinePaths(tr.traceDir, fmt.Sprintf("types_%d.json", checkerIndex))
 	tracer := &typeTracer{
-		fs:           tr.fs,
-		checkerIndex: checkerIndex,
-		typesPath:    typesPath,
-		types:        []TracedType{},
+		fs:                 tr.fs,
+		checkerIndex:       checkerIndex,
+		typesPath:          typesPath,
+		includeTypeDisplay: tr.includeTypeDisplay,
+		types:              []TracedType{},
 	}
 	tr.tracers = append(tr.tracers, tracer)
 	tr.legend = append(tr.legend, TraceRecord{
@@ -483,11 +506,12 @@ func (tr *Tracing) StopTracing() error {
 
 // typeTracer is the per-checker tracer implementation
 type typeTracer struct {
-	fs           vfs.FS
-	checkerIndex int
-	typesPath    string
-	types        []TracedType
-	mu           sync.Mutex
+	fs                 vfs.FS
+	checkerIndex       int
+	typesPath          string
+	includeTypeDisplay bool
+	types              []TracedType
+	mu                 sync.Mutex
 }
 
 func (t *typeTracer) RecordType(typ TracedType) {
@@ -498,7 +522,7 @@ func (t *typeTracer) RecordType(typ TracedType) {
 
 func (t *typeTracer) DumpTypes() error {
 	// Copy the types slice under lock, then release so Display() calls during
-	// buildTypeDescriptor don't deadlock when they create new types
+	// buildTypeDescriptor don't deadlock when they create new types.
 	t.mu.Lock()
 	types := slices.Clone(t.types)
 	t.mu.Unlock()
@@ -507,11 +531,24 @@ func (t *typeTracer) DumpTypes() error {
 		return nil
 	}
 
-	var sb strings.Builder
-	// Write opening bracket (no newline so type ID matches line number)
-	sb.WriteString("[")
+	// Write the opening bracket separately so the descriptor buffer can be
+	// flushed in bounded chunks instead of retaining the whole types_N.json.
+	if err := t.fs.WriteFile(t.typesPath, "["); err != nil {
+		return fmt.Errorf("failed to write types file header: %w", err)
+	}
 
+	var sb strings.Builder
 	recursionIdentityMap := make(map[any]int)
+	flush := func() error {
+		if sb.Len() == 0 {
+			return nil
+		}
+		if err := t.fs.AppendFile(t.typesPath, sb.String()); err != nil {
+			return err
+		}
+		sb.Reset()
+		return nil
+	}
 
 	for i, typ := range types {
 		descriptor := t.buildTypeDescriptor(typ, recursionIdentityMap)
@@ -523,11 +560,19 @@ func (t *typeTracer) DumpTypes() error {
 		if i < len(types)-1 {
 			sb.WriteString(",\n")
 		}
+		if sb.Len() >= typeFlushThreshold {
+			if err := flush(); err != nil {
+				return fmt.Errorf("failed to flush types file: %w", err)
+			}
+		}
 	}
 
 	sb.WriteString("]\n")
 
-	return t.fs.WriteFile(t.typesPath, sb.String())
+	if err := flush(); err != nil {
+		return fmt.Errorf("failed to write types file: %w", err)
+	}
+	return nil
 }
 
 // TypeDescriptor represents a type in the output JSON
@@ -715,9 +760,11 @@ func (t *typeTracer) buildTypeDescriptor(typ TracedType, recursionIdentityMap ma
 		desc.FirstDeclaration = getLocation(firstDeclSymbol.Declarations[0])
 	}
 
-	// Display text
-	if display := typ.Display(); display != "" {
-		desc.Display = display
+	if t.includeTypeDisplay {
+		// Display text
+		if display := typ.Display(); display != "" {
+			desc.Display = display
+		}
 	}
 
 	return desc

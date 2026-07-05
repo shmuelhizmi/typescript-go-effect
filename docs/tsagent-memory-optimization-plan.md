@@ -83,6 +83,10 @@ Changes implemented after the baseline:
 - Added `testdata/tsagent/benchmark-example-typesystem`, a small dependency-free fixture
   for fast iteration on type-system-heavy perf reports before re-running the large
   `rpc-over-bin` project.
+- Tracing now writes `types_N.json` descriptor files in bounded chunks instead of building
+  the full JSON file in a `strings.Builder` while the traced Program is still live.
+- `tsagent` perf capture disables unused type `display` text in `types_N.json`; normal
+  `--generateTrace` output keeps display text by default.
 
 Measured with the optimized binary (`/tmp/tsagent-opt`) on the same project:
 
@@ -132,6 +136,27 @@ The typed trace-args change is a real RSS win, but it is not yet the required 20
 footprint reduction. Keep treating peak footprint as the acceptance signal for the
 original 50 GB-class problem.
 
+Additional samples after chunked type-file writes and disabling unused type display text
+for `tsagent` perf capture:
+
+| Probe | Prior optimized | Current | Change |
+| --- | ---: | ---: | --- |
+| `report perf --top 1` wall | 82.22s | 29.98s | 2.7x faster |
+| `report perf --top 1` RSS | 16.00 GB | 8.99 GB | -44% |
+| `report perf --top 1` footprint | 16.41 GB | 8.99 GB | -45% |
+| `perf summary` wall | 61.97s | 31.74s | 2.0x faster |
+| `perf summary` RSS | 14.94 GB | 9.89 GB | -34% |
+| `perf summary` footprint | 16.83 GB | 9.89 GB | -41% |
+| `report full --top 1` wall | 82.50s | 42.96s | 1.9x faster |
+| `report full --top 1` RSS | 15.65 GB | 9.86 GB | -37% |
+| `report full --top 1` footprint | 16.28 GB | 9.87 GB | -39% |
+
+The `display` opt-out also removes TypeToString side effects from perf capture. On the
+sampled target project, depth-limit markers changed from 677 to 676 and recorded type
+counters dropped because the report no longer traces extra types created only while
+formatting descriptor display strings. The perf report does not render `display`, so the
+remaining fields still cover summary, hot files, hot types, hot checks, and depth limits.
+
 ## Small Iteration Fixture
 
 `testdata/tsagent/benchmark-example-typesystem` is a small TypeScript project intended
@@ -154,10 +179,11 @@ Validated quick probes:
 
 ### Perf report
 
-`internal/tsagent/perf.Gather` still has the largest remaining footprint. The current
-implementation releases compiler programs before type aggregation and no longer retains
-raw trace strings, full type descriptor slices, generic event argument maps, or a
-declaration-origin entry for every recorded type. It still retains:
+`internal/tsagent/perf.Gather` remains the largest individual report provider, but is now
+below the 12 GB target on the measured project. The current implementation releases
+compiler programs before type aggregation and no longer retains raw trace strings, full
+type descriptor slices, generic event argument maps, full type JSON builders, type display
+strings, or a declaration-origin entry for every recorded type. It still retains:
 
 - all normalized trace spans
 - all instant events
@@ -173,6 +199,14 @@ I also attempted decoding a narrower custom type-descriptor shape. It improved w
 but repeatedly worsened RSS (`55.61s`, `15.81 GB` RSS, `16.69 GB` footprint), so the code
 keeps full descriptor decoding while still aggregating and discarding descriptors as they
 stream.
+
+I later retried a manual streaming summary parser for type descriptors. It again improved
+wall time but regressed the large `perf summary` memory sample (`60.99s`, `15.53 GB` RSS,
+`17.27 GB` footprint), so it was reverted.
+
+I also tried detaching the type-tracer snapshot slice while dumping descriptors. It
+slightly reduced RSS but worsened the report footprint sample (`14.18 GB` versus
+`13.97 GB` for chunked type writes alone), so that tweak was reverted.
 
 The old parallel perf capture remains available through `--parallel-perf`, but it was
 not a good default for this project. A post-change parallel probe was stopped after
@@ -267,6 +301,9 @@ Reduce perf report transient memory:
    lookup without retaining the full descriptor slice when possible.
 5. Drop the traced `Program` reference before heavy report rendering once path and line
    lookup data needed by the report has been materialized.
+6. Write `types_N.json` files in bounded chunks instead of one full-file builder.
+7. Skip type descriptor display strings for `tsagent` perf capture because the report
+   does not render them.
 
 Acceptance target:
 
@@ -275,7 +312,10 @@ Acceptance target:
 - Output pages remain equivalent for summary, hot files, hot types, hot checks, and depth
   limits.
 
-Current result: footprint is down from 43.44 GB to 16.41 GB, but still above this target.
+Current result: `report perf --top 1` footprint is down from 43.44 GB to 8.99 GB on the
+target project, and `report full --top 1` is verified at 9.87 GB. This clears the 12 GB
+target and the requested additional 20-30% reduction, but remains above the older
+aspirational 8 GB single-threaded line.
 
 ### Phase 5: Full Report Guardrails
 

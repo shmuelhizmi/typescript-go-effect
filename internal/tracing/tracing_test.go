@@ -2,9 +2,11 @@ package tracing
 
 import (
 	"io/fs"
+	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/microsoft/typescript-go/internal/ast"
 	"github.com/microsoft/typescript-go/internal/json"
 	"github.com/microsoft/typescript-go/internal/vfs/vfstest"
 	"gotest.tools/v3/assert"
@@ -64,6 +66,73 @@ func TestThreadIDsAreStableAcrossFirstSeenOrder(t *testing.T) {
 
 	assert.DeepEqual(t, first, second)
 }
+
+func TestTypeDisplayCanBeDisabled(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name    string
+		options Options
+		want    bool
+	}{
+		{name: "default", options: Options{IncludeTypeDisplay: true}, want: true},
+		{name: "disabled", options: Options{IncludeTypeDisplay: false}, want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fsys := vfstest.FromMap(fstest.MapFS{
+				"/trace": &fstest.MapFile{Mode: fs.ModeDir},
+			}, true)
+
+			tr, err := StartTracingWithOptions(fsys, "/trace", "", true /*deterministic*/, tt.options)
+			assert.NilError(t, err)
+			tracer := tr.NewTypeTracer(0)
+			tracer.RecordType(testTracedType{id: 1, display: "display text"})
+			assert.NilError(t, tr.StopTracing())
+
+			typesText, ok := fsys.ReadFile("/trace/types_0.json")
+			assert.Assert(t, ok)
+			assert.Equal(t, strings.Contains(typesText, `"display"`), tt.want)
+		})
+	}
+}
+
+type testTracedType struct {
+	id      uint32
+	display string
+}
+
+func (t testTracedType) Id() uint32                              { return t.id }
+func (t testTracedType) FormatFlags() []string                   { return []string{"Object"} }
+func (t testTracedType) IsConditional() bool                     { return false }
+func (t testTracedType) Symbol() *ast.Symbol                     { return nil }
+func (t testTracedType) AliasSymbol() *ast.Symbol                { return nil }
+func (t testTracedType) AliasTypeArguments() []TracedType        { return nil }
+func (t testTracedType) IntrinsicName() string                   { return "" }
+func (t testTracedType) UnionTypes() []TracedType                { return nil }
+func (t testTracedType) IntersectionTypes() []TracedType         { return nil }
+func (t testTracedType) IndexType() TracedType                   { return nil }
+func (t testTracedType) IndexedAccessObjectType() TracedType     { return nil }
+func (t testTracedType) IndexedAccessIndexType() TracedType      { return nil }
+func (t testTracedType) ConditionalCheckType() TracedType        { return nil }
+func (t testTracedType) ConditionalExtendsType() TracedType      { return nil }
+func (t testTracedType) ConditionalTrueType() TracedType         { return nil }
+func (t testTracedType) ConditionalFalseType() TracedType        { return nil }
+func (t testTracedType) SubstitutionBaseType() TracedType        { return nil }
+func (t testTracedType) SubstitutionConstraintType() TracedType  { return nil }
+func (t testTracedType) ReferenceTarget() TracedType             { return nil }
+func (t testTracedType) ReferenceTypeArguments() []TracedType    { return nil }
+func (t testTracedType) ReferenceNode() *ast.Node                { return nil }
+func (t testTracedType) ReverseMappedSourceType() TracedType     { return nil }
+func (t testTracedType) ReverseMappedMappedType() TracedType     { return nil }
+func (t testTracedType) ReverseMappedConstraintType() TracedType { return nil }
+func (t testTracedType) EvolvingArrayElementType() TracedType    { return nil }
+func (t testTracedType) EvolvingArrayFinalType() TracedType      { return nil }
+func (t testTracedType) IsTuple() bool                           { return false }
+func (t testTracedType) Pattern() *ast.Node                      { return nil }
+func (t testTracedType) RecursionIdentity() any                  { return nil }
+func (t testTracedType) Display() string                         { return t.display }
 
 func traceThreadIDsForPaths(t *testing.T, paths []string) map[string]int {
 	t.Helper()

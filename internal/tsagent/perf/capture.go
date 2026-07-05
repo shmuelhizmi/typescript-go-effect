@@ -113,7 +113,7 @@ func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, er
 		return nil, fmt.Errorf("create trace sink: %w", err)
 	}
 	defer traceFS.Cleanup()
-	tr, err := tracing.StartTracing(traceFS, traceDir, ws.ConfigPath, false)
+	tr, err := tracing.StartTracingWithOptions(traceFS, traceDir, ws.ConfigPath, false, tracing.Options{IncludeTypeDisplay: false})
 	if err != nil {
 		return nil, fmt.Errorf("start tracing: %w", err)
 	}
