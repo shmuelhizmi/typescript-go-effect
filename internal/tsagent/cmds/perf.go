@@ -83,9 +83,11 @@ func init() {
 		},
 		Run: func(ctx context.Context, ws *core.Workspace, flags any, args []string) (any, error) {
 			f := flags.(*captureFlags)
-			c, err := capture(ctx, ws, f)
+			opts := f.options()
+			opts.HotFilesOnly = true
+			c, err := perf.Gather(ctx, ws, opts)
 			if err != nil {
-				return nil, err
+				return nil, cli.Errorf(cli.ExitFailed, "perf capture failed: %v", err)
 			}
 			files := c.HotFiles(f.includeLibs)
 			if f.top > 0 && len(files) > f.top {

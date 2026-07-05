@@ -51,6 +51,26 @@ const allProbes = [
         args: ["perf", "summary"],
     },
     {
+        name: "perf-hot-files-top50",
+        group: "heavy",
+        args: ["perf", "hot-files", "--top", "50"],
+    },
+    {
+        name: "perf-hot-types-top50",
+        group: "heavy",
+        args: ["perf", "hot-types", "--top", "50"],
+    },
+    {
+        name: "perf-hot-checks-top50",
+        group: "heavy",
+        args: ["perf", "hot-checks", "--top", "50"],
+    },
+    {
+        name: "perf-depth-limits",
+        group: "heavy",
+        args: ["perf", "depth-limits"],
+    },
+    {
         name: "report-perf-top1",
         group: "heavy",
         args: ["report", "perf", "--top", "1"],

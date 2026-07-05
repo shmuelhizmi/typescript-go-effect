@@ -106,6 +106,9 @@ Changes implemented after the baseline:
 - Standalone `perf summary` uses a summary-only capture mode that disables type
   descriptor recording and skips retained span/ranking data, keeping only compiler stats
   and depth-limit hit counts.
+- Standalone `perf hot-files` uses a hot-files-only capture mode that keeps file timing
+  spans and per-file type counts, but skips hot-type aggregation, type-origin maps,
+  instants, and sampled checker span retention.
 
 Measured with the optimized binary (`/tmp/tsagent-opt`) on the same project:
 
@@ -202,6 +205,17 @@ the previous committed binary on the same machine:
 | `report full --top 1` wall | 45.67s | 42.41s | -7% |
 | `report full --top 1` RSS | 6.97 GB | 6.82 GB | -2% |
 | `report full --top 1` footprint | 7.10 GB | 6.84 GB | -4% |
+
+Additional samples after the hot-files-only capture mode:
+
+| Probe | Previous commit | Current | Change |
+| --- | ---: | ---: | --- |
+| `perf hot-files --top 50` wall | 31.14s | 27.03s | -13% |
+| `perf hot-files --top 50` RSS | 6.97 GB | 5.64 GB | -19% |
+| `perf hot-files --top 50` footprint | 7.13 GB | 6.49 GB | -9% |
+| `report full --top 1` wall | 42.41s | 42.51s | flat |
+| `report full --top 1` RSS | 6.82 GB | 6.93 GB | +2% |
+| `report full --top 1` footprint | 6.84 GB | 6.99 GB | +2% |
 
 ## Small Iteration Fixture
 
@@ -368,6 +382,8 @@ Reduce perf report transient memory:
    descriptors directly so `perf.Gather` stays under the 7 GB target without explicit GC.
 9. Let commands that only need summary counters opt into descriptor-free capture instead
    of paying for hot-file/hot-type/hot-check ranking data.
+10. Let standalone hot-file ranking opt into file-only capture instead of paying for
+    hot-type aggregation and retained sampled checker/depth-limit data.
 
 Acceptance target:
 
@@ -378,7 +394,7 @@ Acceptance target:
 
 Current result: `report perf --top 1` footprint is down from 43.44 GB to 8.99 GB on the
 target project after the earlier display optimization, and `report full --top 1` is now
-verified at 6.84 GB after direct type-descriptor aggregation and lower-allocation
+verified at 6.99 GB after direct type-descriptor aggregation and lower-allocation
 descriptor construction. This clears the 12 GB target, the requested additional 20-30%
 reduction, and the follow-up 7 GB full report target without explicit GC inside
 `perf.Gather`.

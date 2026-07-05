@@ -82,6 +82,37 @@ export const value: Box<string> = { value: "ok" };
 	}
 }
 
+func TestPerfHotFilesOnlySkipsOtherRankingData(t *testing.T) {
+	ws := newTestWorkspace(t, map[string]any{
+		"/project/src/models.ts": `
+export interface Box<T> { value: T }
+export const value: Box<string> = { value: "ok" };
+`,
+	})
+	c, err := perf.Gather(context.Background(), ws, perf.Options{SingleThreaded: true, HotFilesOnly: true})
+	if err != nil {
+		t.Fatalf("Gather hot-files-only: %v", err)
+	}
+	files := c.HotFiles(false)
+	if len(files) == 0 {
+		t.Fatal("hot-files-only capture should retain file timings")
+	}
+	if !slices.ContainsFunc(files, func(f *perf.HotFile) bool {
+		return strings.Contains(f.Path, "models.ts") && f.Types > 0
+	}) {
+		t.Fatalf("hot-files-only capture missing file type count: %#v", files)
+	}
+	if got := c.HotTypes(false); len(got) != 0 {
+		t.Fatalf("hot-files-only capture retained hot types: %v", typeNames(got))
+	}
+	if got := c.HotChecks(); len(got) != 0 {
+		t.Fatalf("hot-files-only capture retained hot checks: %#v", got)
+	}
+	if got := c.DepthLimits(); len(got) != 0 {
+		t.Fatalf("hot-files-only capture retained depth limits: %#v", got)
+	}
+}
+
 func TestPerfHotFilesScoping(t *testing.T) {
 	c := gatherFixture(t)
 

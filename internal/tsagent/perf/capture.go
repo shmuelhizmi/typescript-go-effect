@@ -41,6 +41,10 @@ type Options struct {
 	// SummaryOnly captures only compiler stats and depth-limit hit counts. It
 	// skips type descriptor recording and retained span data used by rankings.
 	SummaryOnly bool
+	// HotFilesOnly captures only file timing spans and per-file type counts.
+	// It skips hot-type aggregation, type-origin maps, instants, and sampled
+	// checker spans used by the other rankings.
+	HotFilesOnly bool
 }
 
 // Stats holds the project-level compiler counters and phase timings.
@@ -97,6 +101,7 @@ type Capture struct {
 	storeAllTypeOrigins bool
 	typesAggregatedLive bool
 	summaryOnly         bool
+	hotFilesOnly        bool
 	depthLimitHits      int
 	ws                  *core.Workspace
 	program             *compiler.Program
@@ -130,14 +135,17 @@ func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, er
 		traceOptions.DisableTypeDescriptors = true
 	} else {
 		var hotTypesAll map[string]*hotTypeAgg
-		if opts.IncludeLibs {
+		if opts.IncludeLibs && !opts.HotFilesOnly {
 			hotTypesAll = map[string]*hotTypeAgg{}
 		}
 		c.typeCounts = map[string]int{}
-		c.typeOrigins = map[uint32]uint32{}
+		if !opts.HotFilesOnly {
+			c.typeOrigins = map[uint32]uint32{}
+			c.hotTypesProject = map[string]*hotTypeAgg{}
+			c.storeAllTypeOrigins = true
+		}
 		c.hotTypesAll = hotTypesAll
-		c.hotTypesProject = map[string]*hotTypeAgg{}
-		c.storeAllTypeOrigins = true
+		c.hotFilesOnly = opts.HotFilesOnly
 		c.typesAggregatedLive = true
 		traceOptions.StreamTypeDescriptors = true
 		traceOptions.TypeDescriptorSink = c.consumeTypeDescriptor
@@ -294,8 +302,14 @@ func (c *Capture) parseTraceEvents(fs vfs.FS) error {
 		}
 		switch ev.PH {
 		case "B":
+			if c.hotFilesOnly && !isFileTimingSpan(ev.Name) {
+				return nil
+			}
 			stacks[ev.TID] = append(stacks[ev.TID], openEvent{name: ev.Name, ts: ev.TS, ev: ev})
 		case "E":
+			if c.hotFilesOnly && !isFileTimingSpan(ev.Name) {
+				return nil
+			}
 			stack := stacks[ev.TID]
 			for i := len(stack) - 1; i >= 0; i-- {
 				if stack[i].name == ev.Name {
@@ -306,14 +320,20 @@ func (c *Capture) parseTraceEvents(fs vfs.FS) error {
 				}
 			}
 		case "X":
+			if c.hotFilesOnly && !isFileTimingSpan(ev.Name) {
+				return nil
+			}
 			if ev.Dur != nil {
-				sp := c.spanFrom(ev, *ev.Dur, true)
+				sp := c.spanFrom(ev, *ev.Dur, !c.hotFilesOnly)
 				if sp.Path == "" && !c.storeAllTypeOrigins {
 					c.recordTypeOriginIDs(ev.Args)
 				}
 				c.Spans = append(c.Spans, sp)
 			}
 		case "I":
+			if c.hotFilesOnly {
+				return nil
+			}
 			c.Instants = append(c.Instants, Instant{Phase: ev.Cat, Name: ev.Name, Args: ev.Args})
 			if !c.storeAllTypeOrigins {
 				c.recordTypeOriginIDs(ev.Args)
@@ -377,8 +397,13 @@ func (c *Capture) recordTypeDescriptor(desc *tracing.TypeDescriptor) {
 		if _, needed := c.typeOriginIDs[desc.ID]; needed || c.storeAllTypeOrigins {
 			c.recordTypeOrigin(desc.ID, o)
 		}
-		c.typeCounts[canon]++
+		if c.typeCounts != nil {
+			c.typeCounts[canon]++
+		}
 		origin = &o
+	}
+	if c.hotTypesAll == nil && c.hotTypesProject == nil {
+		return
 	}
 
 	name := desc.SymbolName
@@ -391,7 +416,7 @@ func (c *Capture) recordTypeDescriptor(desc *tracing.TypeDescriptor) {
 	if c.hotTypesAll != nil {
 		c.recordHotType(c.hotTypesAll, name, desc, origin)
 	}
-	if origin != nil && c.inProject(origin.canon) {
+	if c.hotTypesProject != nil && origin != nil && c.inProject(origin.canon) {
 		c.recordHotType(c.hotTypesProject, name, desc, origin)
 	}
 }
@@ -439,6 +464,9 @@ func hasString(values []string, value string) bool {
 }
 
 func (c *Capture) recordTypeOriginIDs(args traceArgs) {
+	if c.typeOriginIDs == nil {
+		return
+	}
 	for _, id := range []uint32{args.TypeID, args.SourceID, args.TargetID} {
 		if id != 0 {
 			c.typeOriginIDs[id] = struct{}{}
@@ -495,4 +523,13 @@ func (c *Capture) spanFrom(ev traceEnvelopeEvent, durUS float64, sampled bool) S
 		s.Args = &args
 	}
 	return s
+}
+
+func isFileTimingSpan(name string) bool {
+	switch name {
+	case "createSourceFile", "bindSourceFile", "checkSourceFile":
+		return true
+	default:
+		return false
+	}
 }
