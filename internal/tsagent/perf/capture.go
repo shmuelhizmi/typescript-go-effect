@@ -66,14 +66,14 @@ type Span struct {
 	End     int
 	Kind    int
 	Sampled bool
-	Args    map[string]any
+	Args    *traceArgs
 }
 
 // Instant is a zero-duration trace marker, e.g. a depth-limit guard firing.
 type Instant struct {
 	Phase string
 	Name  string
-	Args  map[string]any
+	Args  traceArgs
 }
 
 // Capture is the result of a traced compile: aggregated raw material the
@@ -206,13 +206,36 @@ func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, er
 }
 
 type traceEnvelopeEvent struct {
-	PH   string         `json:"ph"`
-	Cat  string         `json:"cat"`
-	TID  int            `json:"tid"`
-	TS   float64        `json:"ts"`
-	Name string         `json:"name"`
-	Dur  *float64       `json:"dur"`
-	Args map[string]any `json:"args"`
+	PH   string    `json:"ph"`
+	Cat  string    `json:"cat"`
+	TID  int       `json:"tid"`
+	TS   float64   `json:"ts"`
+	Name string    `json:"name"`
+	Dur  *float64  `json:"dur"`
+	Args traceArgs `json:"args"`
+}
+
+type traceArgs struct {
+	Path               string `json:"path,omitzero"`
+	Pos                int    `json:"pos,omitzero"`
+	End                int    `json:"end,omitzero"`
+	Kind               int    `json:"kind,omitzero"`
+	TypeID             uint32 `json:"typeId,omitzero"`
+	SourceID           uint32 `json:"sourceId,omitzero"`
+	TargetID           uint32 `json:"targetId,omitzero"`
+	InstantiationDepth int    `json:"instantiationDepth,omitzero"`
+	InstantiationCount int    `json:"instantiationCount,omitzero"`
+	EstimatedCount     int    `json:"estimatedCount,omitzero"`
+	Size               int    `json:"size,omitzero"`
+	Depth              int    `json:"depth,omitzero"`
+	TargetDepth        int    `json:"targetDepth,omitzero"`
+	NumCombinations    int    `json:"numCombinations,omitzero"`
+	SourceSize         int    `json:"sourceSize,omitzero"`
+	TargetSize         int    `json:"targetSize,omitzero"`
+	Parent             uint32 `json:"parent,omitzero"`
+	ID                 uint32 `json:"id,omitzero"`
+	Arity              int    `json:"arity,omitzero"`
+	CheckerID          int    `json:"checkerId,omitzero"`
 }
 
 // parseTraceEvents reads trace.json back from the trace sink and normalizes it
@@ -251,7 +274,7 @@ func (c *Capture) parseTraceEvents(fs vfs.FS) error {
 			if ev.Dur != nil {
 				sp := c.spanFrom(ev, *ev.Dur, true)
 				if sp.Path == "" {
-					c.recordTypeOriginIDs(sp.Args)
+					c.recordTypeOriginIDs(ev.Args)
 				}
 				c.Spans = append(c.Spans, sp)
 			}
@@ -358,9 +381,9 @@ func hasString(values []string, value string) bool {
 	return false
 }
 
-func (c *Capture) recordTypeOriginIDs(args map[string]any) {
-	for _, key := range []string{"typeId", "sourceId", "targetId"} {
-		if id, ok := argUint(args, key); ok {
+func (c *Capture) recordTypeOriginIDs(args traceArgs) {
+	for _, id := range []uint32{args.TypeID, args.SourceID, args.TargetID} {
+		if id != 0 {
 			c.typeOriginIDs[id] = struct{}{}
 		}
 	}
@@ -408,29 +431,16 @@ func readJSONArray[T any](dec *json.Decoder, each func(T) error) error {
 
 func (c *Capture) spanFrom(ev traceEnvelopeEvent, durUS float64, sampled bool) Span {
 	s := Span{Phase: ev.Cat, Name: ev.Name, DurUS: durUS, Sampled: sampled}
-	if ev.Args != nil {
-		if p, ok := ev.Args["path"].(string); ok {
-			s.Path = p
-		}
-		s.Pos = argInt(ev.Args, "pos")
-		s.End = argInt(ev.Args, "end")
-		s.Kind = argInt(ev.Args, "kind")
-		if sampled && s.Path != "" && s.Pos > 0 {
-			s.Line = c.lineOf(s.Path, s.Pos)
-		}
-		if sampled && s.Path == "" {
-			s.Args = ev.Args
-		}
+	s.Path = ev.Args.Path
+	s.Pos = ev.Args.Pos
+	s.End = ev.Args.End
+	s.Kind = ev.Args.Kind
+	if sampled && s.Path != "" && s.Pos > 0 {
+		s.Line = c.lineOf(s.Path, s.Pos)
+	}
+	if sampled && s.Path == "" {
+		args := ev.Args
+		s.Args = &args
 	}
 	return s
-}
-
-func argInt(args map[string]any, key string) int {
-	switch v := args[key].(type) {
-	case float64:
-		return int(v)
-	case int:
-		return v
-	}
-	return 0
 }

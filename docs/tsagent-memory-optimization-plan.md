@@ -77,6 +77,12 @@ Changes implemented after the baseline:
   spans or depth-limit instants; hot-type and per-file counts still see every descriptor.
 - Normalized trace spans retain decoded `args` only for sampled checker operations without
   a direct file path; hot-file spans no longer keep their JSON argument maps.
+- Perf trace event `args` now decode into a typed compact struct instead of a generic
+  `map[string]any`, avoiding per-event map allocation while retaining the keys needed for
+  file attribution, type-origin attribution, and depth-limit details.
+- Added `testdata/tsagent/benchmark-example-typesystem`, a small dependency-free fixture
+  for fast iteration on type-system-heavy perf reports before re-running the large
+  `rpc-over-bin` project.
 
 Measured with the optimized binary (`/tmp/tsagent-opt`) on the same project:
 
@@ -111,17 +117,51 @@ One attempted optimized parallel perf run (`--parallel-perf` equivalent) was sto
 after 343.99s because it was still consuming CPU and had already regressed runtime.
 That reinforced making the lower-memory capture the default report mode.
 
+Additional current-source samples after typed trace-args decoding:
+
+| Probe | Previous optimized | Typed trace args | Change |
+| --- | ---: | ---: | --- |
+| `report perf --top 1` wall | 82.22s | 76.95s | -6% |
+| `report perf --top 1` RSS | 16.00 GB | 9.74 GB | -39% |
+| `report perf --top 1` footprint | 16.41 GB | 17.10 GB | +4% |
+| `perf summary` wall | 61.97s | 86.94s | +40% |
+| `perf summary` RSS | 14.94 GB | 9.95 GB | -33% |
+| `perf summary` footprint | 16.83 GB | 16.36 GB | -3% |
+
+The typed trace-args change is a real RSS win, but it is not yet the required 20-30%
+footprint reduction. Keep treating peak footprint as the acceptance signal for the
+original 50 GB-class problem.
+
+## Small Iteration Fixture
+
+`testdata/tsagent/benchmark-example-typesystem` is a small TypeScript project intended
+for quick optimization loops. It has no external dependencies and exercises generic
+instantiation, conditional types, mapped types, template-literal unions, and a clear
+hotspot in `src/hotspot.ts`.
+
+Validated quick probes:
+
+- `map files` lists the four source files.
+- `check --severity error` returns `0 diagnostics`.
+- `perf summary --single-threaded` completes in about `0.03s`, with about `31.8 MB`
+  RSS and `22.3 MB` peak footprint in the sampled run.
+- `perf hot-files --top 5 --single-threaded` ranks `src/hotspot.ts` first.
+- `perf hot-types --top 10 --single-threaded` surfaces type-heavy symbols including
+  `TypedSlot`, `ApiResult`, `DeepNormalize`, and `ExtractVerb`.
+- `report perf --top 10 --single-threaded` writes a one-page HTML report.
+
 ## Remaining Hot Spots / Follow-up
 
 ### Perf report
 
 `internal/tsagent/perf.Gather` still has the largest remaining footprint. The current
 implementation releases compiler programs before type aggregation and no longer retains
-raw trace strings, full type descriptor slices, span argument maps for hot-file spans, or
-a declaration-origin entry for every recorded type. It still retains:
+raw trace strings, full type descriptor slices, generic event argument maps, or a
+declaration-origin entry for every recorded type. It still retains:
 
 - all normalized trace spans
 - all instant events
+- typed args for sampled checker spans without direct file paths
 - type-id origin maps and hot-type aggregate maps
 
 I attempted direct trace-span aggregation into hot-file and hot-check structures, but it

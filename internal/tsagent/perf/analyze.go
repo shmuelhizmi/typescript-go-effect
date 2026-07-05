@@ -193,8 +193,10 @@ func (c *Capture) HotChecks() []*HotCheck {
 		if sp.Path != "" {
 			hc.File = c.display(c.canonical(sp.Path))
 			hc.Line = sp.Line
-		} else if loc := c.fileOfTypeArgs(sp.Args); loc != "" {
-			hc.File = loc
+		} else if sp.Args != nil {
+			if loc := c.fileOfTypeArgs(*sp.Args); loc != "" {
+				hc.File = loc
+			}
 		}
 		out = append(out, hc)
 	}
@@ -280,12 +282,13 @@ func (c *Capture) inProject(canon string) bool {
 // fileOfTypeArgs resolves the declaring file of the first type id present in a
 // trace event's args (typeId/sourceId/targetId), for events that reference
 // types rather than a source path.
-func (c *Capture) fileOfTypeArgs(args map[string]any) string {
-	for _, key := range []string{"typeId", "sourceId", "targetId"} {
-		if id, ok := argUint(args, key); ok {
-			if origin, ok := c.typeOrigins[id]; ok {
-				return c.display(origin.canon)
-			}
+func (c *Capture) fileOfTypeArgs(args traceArgs) string {
+	for _, id := range []uint32{args.TypeID, args.SourceID, args.TargetID} {
+		if id == 0 {
+			continue
+		}
+		if origin, ok := c.typeOrigins[id]; ok {
+			return c.display(origin.canon)
 		}
 	}
 	return ""
@@ -330,32 +333,45 @@ func cmpDescF(a, b float64) int {
 	return 0
 }
 
-func argUint(args map[string]any, key string) (uint32, bool) {
-	switch v := args[key].(type) {
-	case float64:
-		return uint32(v), true
-	case int:
-		return uint32(v), true
-	}
-	return 0, false
-}
-
-func formatArgs(args map[string]any) string {
-	keys := make([]string, 0, len(args))
-	for k := range args {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, fmt.Sprintf("%s=%v", k, formatArgValue(args[k])))
-	}
+func formatArgs(args traceArgs) string {
+	var parts []string
+	appendStringArg(&parts, "path", args.Path)
+	appendIntArg(&parts, "pos", args.Pos)
+	appendIntArg(&parts, "end", args.End)
+	appendIntArg(&parts, "kind", args.Kind)
+	appendUintArg(&parts, "typeId", args.TypeID)
+	appendUintArg(&parts, "sourceId", args.SourceID)
+	appendUintArg(&parts, "targetId", args.TargetID)
+	appendIntArg(&parts, "instantiationDepth", args.InstantiationDepth)
+	appendIntArg(&parts, "instantiationCount", args.InstantiationCount)
+	appendIntArg(&parts, "estimatedCount", args.EstimatedCount)
+	appendIntArg(&parts, "size", args.Size)
+	appendIntArg(&parts, "depth", args.Depth)
+	appendIntArg(&parts, "targetDepth", args.TargetDepth)
+	appendIntArg(&parts, "numCombinations", args.NumCombinations)
+	appendIntArg(&parts, "sourceSize", args.SourceSize)
+	appendIntArg(&parts, "targetSize", args.TargetSize)
+	appendUintArg(&parts, "parent", args.Parent)
+	appendUintArg(&parts, "id", args.ID)
+	appendIntArg(&parts, "arity", args.Arity)
+	appendIntArg(&parts, "checkerId", args.CheckerID)
 	return strings.Join(parts, " ")
 }
 
-func formatArgValue(v any) any {
-	if f, ok := v.(float64); ok && f == float64(int64(f)) {
-		return int64(f)
+func appendStringArg(parts *[]string, key string, value string) {
+	if value != "" {
+		*parts = append(*parts, fmt.Sprintf("%s=%s", key, value))
 	}
-	return v
+}
+
+func appendIntArg(parts *[]string, key string, value int) {
+	if value != 0 {
+		*parts = append(*parts, fmt.Sprintf("%s=%d", key, value))
+	}
+}
+
+func appendUintArg(parts *[]string, key string, value uint32) {
+	if value != 0 {
+		*parts = append(*parts, fmt.Sprintf("%s=%d", key, value))
+	}
 }
