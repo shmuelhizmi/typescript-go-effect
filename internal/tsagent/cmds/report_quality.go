@@ -39,8 +39,9 @@ func init() {
 				maxScore = sc
 			}
 		}
-		rows := make([]report.Row, 0, len(res.Classes))
-		for _, c := range res.Classes {
+		classes := topNSlice(res.Classes, o.top)
+		rows := make([]report.Row, 0, len(classes))
+		for _, c := range classes {
 			rows = append(rows, report.Row{
 				{Text: strconv.Itoa(len(c.Members)), Class: "r", Meter: &report.MeterSpec{Val: float64(len(c.Members) * c.NodeCount), Max: maxScore, Color: "var(--c-accent2)"}},
 				{Text: strconv.Itoa(c.NodeCount), Class: "r mono dim"},
@@ -56,7 +57,7 @@ func init() {
 	})
 
 	qualityProvider("complexity", false, func(ctx context.Context, ws *core.Workspace, o reportOptions) (*report.Page, error) {
-		res, err := runAnalyzeComplexity(ctx, ws, &analyzeComplexityFlags{top: o.top}, nil)
+		res, err := runAnalyzeComplexity(ctx, ws, &analyzeComplexityFlags{top: o.top, typeCandidateLimit: reportComplexityTypeCandidateLimit(o.top)}, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -87,7 +88,7 @@ func init() {
 	})
 
 	qualityProvider("assertions", false, func(ctx context.Context, ws *core.Workspace, o reportOptions) (*report.Page, error) {
-		res, err := runAnalyzeAssertions(ctx, ws, &assertionsFlags{}, nil)
+		res, err := runAnalyzeAssertionCounts(ws, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -113,15 +114,16 @@ func init() {
 			}
 			return strings.Compare(a.file, b.file)
 		})
-		rows := make([]report.Row, 0, len(files))
-		for _, f := range files {
+		topFiles := topNSlice(files, o.top)
+		rows := make([]report.Row, 0, len(topFiles))
+		for _, f := range topFiles {
 			rows = append(rows, report.Row{
 				{Text: f.file, Class: "path"},
 				{Text: strconv.Itoa(f.total), Class: "r", Meter: &report.MeterSpec{Val: float64(f.total), Max: float64(maxTotal), Color: "var(--c-accent)"}},
 			})
 		}
 		return &report.Page{
-			ID: "assertions", Label: "Assertions", Group: "Quality", Badge: badgeCount(len(res.Rows)),
+			ID: "assertions", Label: "Assertions", Group: "Quality", Badge: badgeCount(totalKindCounts(res.Totals)),
 			Body: []report.Section{report.Table("Assertion density (casts, non-null, satisfies, ts-* directives)", "No assertions found.", []report.Col{
 				{Header: "File"}, {Header: "Assertions", Right: true},
 			}, rows)},
@@ -133,8 +135,9 @@ func init() {
 		if err != nil {
 			return nil, err
 		}
-		rows := make([]report.Row, 0, len(res.Rows))
-		for _, r := range res.Rows {
+		exhaustivenessRows := topNSlice(res.Rows, o.top)
+		rows := make([]report.Row, 0, len(exhaustivenessRows))
+		for _, r := range exhaustivenessRows {
 			rows = append(rows, report.Row{
 				{Text: fmt.Sprintf("%s:%d", r.File, r.Line), Class: "path"},
 				{Text: r.Discriminant, Class: "mono"},
@@ -161,8 +164,9 @@ func init() {
 				maxLines = b.TransitiveLines
 			}
 		}
-		rows := make([]report.Row, 0, len(res.Barrels))
-		for _, b := range res.Barrels {
+		barrels := topNSlice(res.Barrels, o.top)
+		rows := make([]report.Row, 0, len(barrels))
+		for _, b := range barrels {
 			rows = append(rows, report.Row{
 				{Text: b.File, Class: "path"},
 				{Text: strconv.Itoa(b.Reexports), Class: "r mono dim"},
@@ -196,8 +200,9 @@ func init() {
 				maxEv = len(m.Evidence)
 			}
 		}
-		rows := make([]report.Row, 0, len(impure))
-		for _, m := range impure {
+		topImpure := topNSlice(impure, o.top)
+		rows := make([]report.Row, 0, len(topImpure))
+		for _, m := range topImpure {
 			rows = append(rows, report.Row{
 				{Text: m.File, Class: "path"},
 				{Text: strconv.Itoa(len(m.Evidence)), Class: "r", Meter: &report.MeterSpec{Val: float64(len(m.Evidence)), Max: float64(maxEv), Color: "var(--c-accent)"}},
@@ -223,12 +228,14 @@ func init() {
 		for _, d := range res.PhantomDeps {
 			rows = append(rows, report.Row{{Text: d, Class: "mono"}, {Text: "phantom (imported, never declared)", Class: "dim"}})
 		}
+		totalRows := len(rows)
+		rows = topNSlice(rows, o.top)
 		empty := "All dependencies are accounted for."
 		if res.Note != "" {
 			empty = res.Note
 		}
 		return &report.Page{
-			ID: "unused-deps", Label: "Dependencies", Group: "Quality", Badge: badgeCount(len(rows)),
+			ID: "unused-deps", Label: "Dependencies", Group: "Quality", Badge: badgeCount(totalRows),
 			Body: []report.Section{report.Table("Dependency hygiene", empty, []report.Col{
 				{Header: "Dependency"}, {Header: "Status"},
 			}, rows)},
@@ -240,8 +247,9 @@ func init() {
 		if err != nil {
 			return nil, err
 		}
-		rows := make([]report.Row, 0, len(res.Symbols))
-		for _, s := range res.Symbols {
+		symbols := topNSlice(res.Symbols, o.top)
+		rows := make([]report.Row, 0, len(symbols))
+		for _, s := range symbols {
 			rows = append(rows, report.Row{
 				{Text: s.Name, Class: "sym"},
 				{Text: s.Kind, Class: "dim"},
@@ -286,6 +294,21 @@ func init() {
 			}, rows)},
 		}, nil
 	})
+}
+
+func reportComplexityTypeCandidateLimit(top int) int {
+	if top <= 0 {
+		return 0
+	}
+	return max(top*10, 200)
+}
+
+func totalKindCounts(counts map[string]int) int {
+	total := 0
+	for _, n := range counts {
+		total += n
+	}
+	return total
 }
 
 // cloneLocations renders a compact location summary for a clone class.

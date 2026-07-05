@@ -161,6 +161,7 @@ func (s *Session) rebuild() error {
 		Cwd:            s.cwd,
 		FS:             fs,
 		SingleThreaded: s.singleThreaded,
+		Persistent:     true,
 	})
 	if err != nil {
 		return err

@@ -124,7 +124,11 @@ func run(args []string, stdout io.Writer, stderr io.Writer) int {
 	ctx := context.Background()
 	var ws *core.Workspace
 	if cmd.NeedsProgram {
-		ws, err = core.NewWorkspace(core.Options{Project: global.project})
+		configOnly := cmd.ConfigOnly
+		if chooser, ok := cmdFlags.(interface{ ConfigOnlyWorkspace() bool }); ok && chooser.ConfigOnlyWorkspace() {
+			configOnly = true
+		}
+		ws, err = core.NewWorkspace(core.Options{Project: global.project, ConfigOnly: configOnly})
 		if err != nil {
 			fmt.Fprintf(stderr, "tsagent: %v\n", err)
 			return cli.ExitCode(err)

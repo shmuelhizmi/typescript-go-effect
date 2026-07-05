@@ -16,6 +16,7 @@ import (
 type captureFlags struct {
 	emit           bool
 	singleThreaded bool
+	parallelPerf   bool
 	includeLibs    bool
 	top            int
 }
@@ -23,6 +24,7 @@ type captureFlags struct {
 func (f *captureFlags) register(fs *flag.FlagSet) {
 	fs.BoolVar(&f.emit, "emit", false, "include the emit phase (measures declaration-emit cost)")
 	fs.BoolVar(&f.singleThreaded, "single-threaded", false, "use one checker for cleaner per-file timing attribution")
+	fs.BoolVar(&f.parallelPerf, "parallel-perf", false, "use parallel checker workers (higher memory)")
 }
 
 // registerScoped adds --include-libs for the ranking commands, which default to
@@ -33,7 +35,7 @@ func (f *captureFlags) registerScoped(fs *flag.FlagSet) {
 }
 
 func (f *captureFlags) options() perf.Options {
-	return perf.Options{Emit: f.emit, SingleThreaded: f.singleThreaded}
+	return perf.Options{Emit: f.emit, SingleThreaded: f.singleThreaded || !f.parallelPerf}
 }
 
 func capture(ctx context.Context, ws *core.Workspace, f *captureFlags) (*perf.Capture, error) {
@@ -50,6 +52,7 @@ func init() {
 		Name:         "summary",
 		Summary:      "Project type-system performance budget: phase split, counters, and a verdict",
 		NeedsProgram: true,
+		ConfigOnly:   true,
 		Flags: func(fs *flag.FlagSet) any {
 			f := &captureFlags{}
 			f.register(fs)
@@ -68,6 +71,7 @@ func init() {
 		Name:         "hot-files",
 		Summary:      "Files ranked by compiler time (parse/bind/check) and recorded type count",
 		NeedsProgram: true,
+		ConfigOnly:   true,
 		Flags: func(fs *flag.FlagSet) any {
 			f := &captureFlags{}
 			f.registerScoped(fs)
@@ -92,6 +96,7 @@ func init() {
 		Name:         "hot-types",
 		Summary:      "Generics/aliases ranked by how many distinct types they instantiate (instantiation spread)",
 		NeedsProgram: true,
+		ConfigOnly:   true,
 		Flags: func(fs *flag.FlagSet) any {
 			f := &captureFlags{}
 			f.registerScoped(fs)
@@ -116,6 +121,7 @@ func init() {
 		Name:         "hot-checks",
 		Summary:      "Individual slow checker operations the tracer sampled (>~10ms), with source location",
 		NeedsProgram: true,
+		ConfigOnly:   true,
 		Flags: func(fs *flag.FlagSet) any {
 			f := &captureFlags{}
 			f.register(fs)
@@ -140,6 +146,7 @@ func init() {
 		Name:         "depth-limits",
 		Summary:      "Type explosions that tripped a depth/size guard — the highest-value fixes",
 		NeedsProgram: true,
+		ConfigOnly:   true,
 		Flags: func(fs *flag.FlagSet) any {
 			f := &captureFlags{}
 			f.register(fs)

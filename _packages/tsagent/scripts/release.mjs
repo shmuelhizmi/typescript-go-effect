@@ -1,5 +1,6 @@
 // One-command release flow for @playfast/tsagent:
 //   npm run tsagent:release -- patch
+//   npm run tsagent:release -- current   # retry publishing the current version
 //
 // Bumps _packages/tsagent/package.json, builds all platform packages, commits
 // the current worktree plus the version bump, then publishes platform packages
@@ -69,29 +70,40 @@ for (let i = 0; i < args.length; i++) {
 
 const pkg = readJSON(packagePath);
 const previousVersion = pkg.version;
-const nextVersion = nextPackageVersion(previousVersion, opts.bump);
+const publishCurrent = opts.bump === "current" || opts.bump === "resume";
+const nextVersion = publishCurrent ? previousVersion : nextPackageVersion(previousVersion, opts.bump);
 const mainPackage = pkg.name;
 
-console.log(`${mainPackage}: ${previousVersion} -> ${nextVersion}`);
+console.log(publishCurrent ? `${mainPackage}: publishing current ${nextVersion}` : `${mainPackage}: ${previousVersion} -> ${nextVersion}`);
 
-if (opts.publish && !opts.dryRun) {
+if (opts.publish && !opts.dryRun && !publishCurrent) {
     assertPackageVersionIsNew(mainPackage, nextVersion);
     for (const dir of platformDirs) {
         assertPackageVersionIsNew(`@playfast/${dir}`, nextVersion);
     }
 }
 
-pkg.version = nextVersion;
-for (const dep of Object.keys(pkg.optionalDependencies ?? {})) {
-    pkg.optionalDependencies[dep] = nextVersion;
+if (!publishCurrent) {
+    pkg.version = nextVersion;
+    for (const dep of Object.keys(pkg.optionalDependencies ?? {})) {
+        pkg.optionalDependencies[dep] = nextVersion;
+    }
+    writeJSON(packagePath, pkg, opts.dryRun);
 }
-writeJSON(packagePath, pkg, opts.dryRun);
 
 run("node", [buildScript], { dryRun: opts.dryRun });
 
-if (opts.commit) {
+if (opts.commit && !publishCurrent) {
     run("git", ["add", "-A"], { dryRun: opts.dryRun });
-    run("git", ["commit", "-m", `tsagent: release v${nextVersion}`], { dryRun: opts.dryRun });
+    if (opts.dryRun || hasStagedChanges()) {
+        run("git", ["commit", "-m", `tsagent: release v${nextVersion}`], { dryRun: opts.dryRun });
+    }
+    else {
+        console.log("git commit skipped: no staged changes");
+    }
+}
+else if (publishCurrent) {
+    console.log("git commit skipped: current/resume mode");
 }
 
 if (opts.publish) {
@@ -113,7 +125,7 @@ function requireValue(values, index, flag) {
 }
 
 function usage() {
-    console.log(`Usage: npm run tsagent:release -- [patch|minor|major|x.y.z] [flags]
+    console.log(`Usage: npm run tsagent:release -- [patch|minor|major|x.y.z|current] [flags]
 
 Flags:
   --tag <name>     npm dist-tag to publish with (default: latest)
@@ -122,7 +134,8 @@ Flags:
   --no-publish     bump/build/commit without publishing
   --dry-run        print the release steps without changing files
 
-The command commits the full current worktree plus the version bump.`);
+The command commits the full current worktree plus the version bump.
+Use "current" or "resume" to rebuild and publish the current package version without another bump.`);
 }
 
 function readJSON(file) {
@@ -197,10 +210,18 @@ function output(command, args, { allowFailure = false } = {}) {
 }
 
 function assertPackageVersionIsNew(packageName, version) {
-    const existing = output("npm", ["view", `${packageName}@${version}`, "version"], { allowFailure: true });
-    if (existing === version) {
+    if (packageVersionExists(packageName, version)) {
         throw new Error(`${packageName}@${version} already exists on npm`);
     }
+}
+
+function packageVersionExists(packageName, version) {
+    return output("npm", ["view", `${packageName}@${version}`, "version"], { allowFailure: true }) === version;
+}
+
+function hasStagedChanges() {
+    const result = spawnSync("git", ["diff", "--cached", "--quiet"], { cwd: repoRoot, stdio: "ignore" });
+    return result.status === 1;
 }
 
 function ensureNpmLogin(dryRun) {
@@ -223,6 +244,10 @@ function ensureNpmLogin(dryRun) {
 
 function publishPackage(packageDir, expectedName, expectedVersion, { tag, otp, dryRun }) {
     const pkg = dryRun ? { name: expectedName, version: expectedVersion } : readJSON(path.join(packageDir, "package.json"));
+    if (!dryRun && packageVersionExists(pkg.name, pkg.version)) {
+        console.log(`publishing ${pkg.name}@${pkg.version}: already on npm, skipping`);
+        return;
+    }
     const args = ["publish", packageDir, "--access", "public", "--tag", tag];
     if (otp) {
         args.push("--otp", otp);

@@ -114,14 +114,9 @@ func (c *Capture) HotFiles(includeLibs bool) []*HotFile {
 			hf.CheckMS += sp.DurUS / 1000
 		}
 	}
-	for i := range c.Types {
-		t := &c.Types[i]
-		if t.FirstDeclaration == nil {
-			continue
-		}
-		canon := c.canonical(t.FirstDeclaration.Path)
+	for canon, count := range c.typeCounts {
 		if hf := byPath[canon]; hf != nil {
-			hf.Types++
+			hf.Types = count
 		}
 	}
 	out := make([]*HotFile, 0, len(byPath))
@@ -156,44 +151,9 @@ type HotType struct {
 // Unless includeLibs is set, only types declared in the user's own files are
 // counted.
 func (c *Capture) HotTypes(includeLibs bool) []*HotType {
-	type agg struct {
-		ht        *HotType
-		haveOrign bool
-	}
-	byName := map[string]*agg{}
-	for i := range c.Types {
-		t := &c.Types[i]
-		if !includeLibs {
-			if t.FirstDeclaration == nil || !c.inProject(c.canonical(t.FirstDeclaration.Path)) {
-				continue
-			}
-		}
-		name := t.SymbolName
-		if name == "" {
-			name = t.IntrinsicName
-		}
-		if name == "" {
-			continue
-		}
-		a := byName[name]
-		if a == nil {
-			a = &agg{ht: &HotType{Symbol: name}}
-			byName[name] = a
-		}
-		a.ht.Count++
-		if len(t.UnionTypes) > a.ht.MaxUnion {
-			a.ht.MaxUnion = len(t.UnionTypes)
-		}
-		if slices.Contains(t.Flags, "Conditional") {
-			a.ht.Conditional++
-		}
-		if !a.haveOrign && t.FirstDeclaration != nil {
-			a.ht.File = c.display(c.canonical(t.FirstDeclaration.Path))
-			if t.FirstDeclaration.Start != nil {
-				a.ht.Line = t.FirstDeclaration.Start.Line
-			}
-			a.haveOrign = true
-		}
+	byName := c.hotTypesProject
+	if includeLibs {
+		byName = c.hotTypesAll
 	}
 	out := make([]*HotType, 0, len(byName))
 	for _, a := range byName {
@@ -232,9 +192,7 @@ func (c *Capture) HotChecks() []*HotCheck {
 		hc := &HotCheck{Name: sp.Name, Phase: sp.Phase, DurMS: sp.DurUS / 1000}
 		if sp.Path != "" {
 			hc.File = c.display(c.canonical(sp.Path))
-			if sp.Pos > 0 {
-				hc.Line = c.lineOf(sp.Path, sp.Pos)
-			}
+			hc.Line = sp.Line
 		} else if loc := c.fileOfTypeArgs(sp.Args); loc != "" {
 			hc.File = loc
 		}
@@ -283,19 +241,26 @@ func (c *Capture) DepthLimits() []*DepthLimit {
 
 func (c *Capture) canonical(p string) string {
 	if c.canonMap == nil {
-		c.canonMap = map[string]string{}
-		if c.program != nil {
-			for _, f := range c.program.SourceFiles() {
-				fn := f.FileName()
-				c.canonMap[fn] = fn
-				c.canonMap[string(f.Path())] = fn
-			}
-		}
+		c.initCanonMap()
 	}
 	if canon, ok := c.canonMap[p]; ok {
 		return canon
 	}
 	return p
+}
+
+func (c *Capture) initCanonMap() {
+	if c.canonMap == nil {
+		c.canonMap = map[string]string{}
+	}
+	if c.program == nil {
+		return
+	}
+	for _, f := range c.program.SourceFiles() {
+		fn := f.FileName()
+		c.canonMap[fn] = fn
+		c.canonMap[string(f.Path())] = fn
+	}
 }
 
 // inProject reports whether a file belongs to the user's own codebase, i.e. it
@@ -318,8 +283,8 @@ func (c *Capture) inProject(canon string) bool {
 func (c *Capture) fileOfTypeArgs(args map[string]any) string {
 	for _, key := range []string{"typeId", "sourceId", "targetId"} {
 		if id, ok := argUint(args, key); ok {
-			if t := c.TypeByID[id]; t != nil && t.FirstDeclaration != nil {
-				return c.display(c.canonical(t.FirstDeclaration.Path))
+			if origin, ok := c.typeOrigins[id]; ok {
+				return c.display(origin.canon)
 			}
 		}
 	}

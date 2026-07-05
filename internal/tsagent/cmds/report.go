@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -42,6 +43,7 @@ type reportOptions struct {
 	includeLibs      bool // perf: fold bundled libs/node_modules into rankings
 	emit             bool // perf: measure the emit phase
 	singleThreaded   bool // perf: single-threaded capture
+	parallelPerf     bool // perf: opt into parallel capture
 	top              int  // max rows per ranking table
 	include          string
 	includeExpensive bool
@@ -54,6 +56,7 @@ func registerReportFlags(fs *flag.FlagSet, generic bool) *reportOptions {
 	fs.BoolVar(&o.includeLibs, "include-libs", false, "include bundled libs/node_modules in the perf rankings")
 	fs.BoolVar(&o.emit, "emit", false, "measure the emit phase in the perf capture")
 	fs.BoolVar(&o.singleThreaded, "single-threaded", false, "single-threaded perf capture for cleaner per-file timing")
+	fs.BoolVar(&o.parallelPerf, "parallel-perf", false, "run perf capture with parallel checker workers (higher memory)")
 	if generic {
 		fs.StringVar(&o.include, "include", "", "comma-separated report items (e.g. perf,duplicates,file-size)")
 	} else {
@@ -62,13 +65,19 @@ func registerReportFlags(fs *flag.FlagSet, generic bool) *reportOptions {
 	return o
 }
 
+func (o *reportOptions) ConfigOnlyWorkspace() bool {
+	keys := splitCSV(o.include)
+	return len(keys) == 1 && keys[0] == "perf"
+}
+
 func init() {
-	register := func(name, summary string, generic bool, sel func(o reportOptions) ([]reportProvider, error)) {
+	register := func(name, summary string, generic bool, configOnly bool, sel func(o reportOptions) ([]reportProvider, error)) {
 		cli.Register(cli.Command{
 			Family:       "report",
 			Name:         name,
 			Summary:      summary,
 			NeedsProgram: true,
+			ConfigOnly:   configOnly,
 			Flags: func(fs *flag.FlagSet) any {
 				return registerReportFlags(fs, generic)
 			},
@@ -84,14 +93,19 @@ func init() {
 	}
 
 	register("perf", "Multi-page HTML performance report (type-system budget, hot files/types, treemap)", false,
+		true,
 		func(o reportOptions) ([]reportProvider, error) { return providersInGroup("Performance", o), nil })
 	register("quality", "Multi-page HTML quality report (duplicates, complexity, assertions, …)", false,
+		false,
 		func(o reportOptions) ([]reportProvider, error) { return providersInGroup("Quality", o), nil })
 	register("structure", "Multi-page HTML structure report (file size, comment density, function metrics)", false,
+		false,
 		func(o reportOptions) ([]reportProvider, error) { return providersInGroup("Structure", o), nil })
 	register("full", "Multi-page HTML report across every group (perf + quality + structure)", false,
+		false,
 		func(o reportOptions) ([]reportProvider, error) { return providersInGroup("", o), nil })
 	register("", "Generic HTML report over an explicit --include set of items", true,
+		false,
 		func(o reportOptions) ([]reportProvider, error) { return providersFromInclude(o.include) })
 }
 
@@ -173,15 +187,8 @@ func runReport(ctx context.Context, ws *core.Workspace, provs []reportProvider, 
 		return nil, cli.UsageErrorf("report: no items selected")
 	}
 	doc := &report.Document{Title: "tsagent report", Brand: ws.RelPath(ws.RootDir)}
-	var failures []string
-	for _, p := range provs {
-		pages, err := p.Build(ctx, ws, o)
-		if err != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", p.Key, err))
-			continue
-		}
-		doc.Pages = append(doc.Pages, pages...)
-	}
+	pages, failures := buildReportPages(ctx, ws, provs, o)
+	doc.Pages = append(doc.Pages, pages...)
 
 	out := o.out
 	if out == "" {
@@ -200,6 +207,66 @@ func runReport(ctx context.Context, ws *core.Workspace, provs []reportProvider, 
 		return res, cli.PartialErrorf("report: %d section(s) failed: %s", len(failures), strings.Join(failures, "; "))
 	}
 	return res, nil
+}
+
+type builtReportPages struct {
+	index int
+	pages []*report.Page
+}
+
+func buildReportPages(ctx context.Context, ws *core.Workspace, provs []reportProvider, o reportOptions) ([]*report.Page, []string) {
+	perfIndex := slices.IndexFunc(provs, func(p reportProvider) bool { return p.Key == "perf" })
+	if perfIndex < 0 {
+		return buildProviders(ctx, ws, provs, o)
+	}
+
+	var built []builtReportPages
+	var failures []string
+	for i, p := range provs {
+		if i == perfIndex {
+			continue
+		}
+		pages, errs := buildProviders(ctx, ws, []reportProvider{p}, o)
+		built = append(built, builtReportPages{index: i, pages: pages})
+		failures = append(failures, errs...)
+	}
+
+	releaseWorkspaceProgram(ws)
+	pages, errs := buildProviders(ctx, ws, []reportProvider{provs[perfIndex]}, o)
+	built = append(built, builtReportPages{index: perfIndex, pages: pages})
+	failures = append(failures, errs...)
+
+	slices.SortFunc(built, func(a, b builtReportPages) int { return a.index - b.index })
+	var out []*report.Page
+	for _, b := range built {
+		out = append(out, b.pages...)
+	}
+	return out, failures
+}
+
+func buildProviders(ctx context.Context, ws *core.Workspace, provs []reportProvider, o reportOptions) ([]*report.Page, []string) {
+	var pages []*report.Page
+	var failures []string
+	for _, p := range provs {
+		pagesForProvider, err := p.Build(ctx, ws, o)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", p.Key, err))
+			continue
+		}
+		pages = append(pages, pagesForProvider...)
+	}
+	return pages, failures
+}
+
+func releaseWorkspaceProgram(ws *core.Workspace) {
+	if ws == nil || !ws.Releasable {
+		return
+	}
+	ws.Program = nil
+	ws.LS = nil
+	ws.Conv = nil
+	runtime.GC()
+	runtime.GC()
 }
 
 // ReportDocResult is the result of a `report` command: the written HTML path

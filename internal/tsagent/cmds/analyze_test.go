@@ -247,6 +247,19 @@ func TestAnalyzeAssertions(t *testing.T) {
 	if fileCounts == nil || fileCounts.Counts["non-null"] != 1 {
 		t.Errorf("per-file counts for src/asserts.ts = %+v", fileCounts)
 	}
+
+	countsOnly, err := runAnalyzeAssertionCounts(ws, nil)
+	if err != nil {
+		t.Fatalf("runAnalyzeAssertionCounts: %v", err)
+	}
+	if len(countsOnly.Rows) != 0 {
+		t.Fatalf("count-only assertions should not retain detail rows, got %d", len(countsOnly.Rows))
+	}
+	for kind, want := range wantTotals {
+		if got := countsOnly.Totals[kind]; got != want {
+			t.Errorf("count-only totals[%s] = %d, want %d (totals: %v)", kind, got, want, countsOnly.Totals)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -453,6 +466,20 @@ func TestAnalyzeComplexity(t *testing.T) {
 	}
 	if len(result.Entries) != 1 || result.Entries[0].Name != "gnarly" {
 		t.Errorf("--top 1 entries = %+v, want only gnarly", result.Entries)
+	}
+
+	result, err = runAnalyzeComplexity(ctx, ws, &analyzeComplexityFlags{top: 25, typeCandidateLimit: 1}, nil)
+	if err != nil {
+		t.Fatalf("runAnalyzeComplexity(bounded): %v", err)
+	}
+	if len(result.Entries) != 2 {
+		t.Fatalf("bounded entries = %d, want 2", len(result.Entries))
+	}
+	if result.Entries[0].Name != "gnarly" || result.Entries[0].TypeComplexity <= 0 {
+		t.Errorf("bounded top entry = %+v, want gnarly with type complexity", result.Entries[0])
+	}
+	if result.Entries[1].Name != "simple" || result.Entries[1].TypeComplexity != 0 {
+		t.Errorf("bounded second entry = %+v, want simple without type complexity", result.Entries[1])
 	}
 
 	// --threshold filters out the simple function.

@@ -35,6 +35,32 @@ func TestWorkspaceProjectDirWalksUpToCoveringTsconfig(t *testing.T) {
 	}
 }
 
+func TestWorkspaceConfigOnlySkipsProgram(t *testing.T) {
+	t.Parallel()
+	if !bundled.Embedded {
+		t.Skip("bundled files are not embedded")
+	}
+	fs := bundled.WrapFS(vfstest.FromMap(map[string]any{
+		"/project/tsconfig.json": `{"compilerOptions": {"strict": true, "target": "esnext"}}`,
+		"/project/src/a.ts":      "export const a = 1;\n",
+	}, true /*useCaseSensitiveFileNames*/))
+	ws, err := NewWorkspace(Options{
+		Project:    "/project",
+		Cwd:        "/project",
+		FS:         fs,
+		ConfigOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("NewWorkspace(ConfigOnly): %v", err)
+	}
+	if ws.Config == nil || ws.Program != nil || ws.LS != nil || ws.Conv != nil {
+		t.Fatalf("config-only workspace Config/Program/LS/Conv = %v/%v/%v/%v, want config only", ws.Config != nil, ws.Program, ws.LS, ws.Conv)
+	}
+	if !ws.Releasable {
+		t.Fatal("one-shot config-only workspace should be releasable")
+	}
+}
+
 func TestWorkspaceProjectDirWithoutAnyTsconfigMentionsWalk(t *testing.T) {
 	t.Parallel()
 	if !bundled.Embedded {

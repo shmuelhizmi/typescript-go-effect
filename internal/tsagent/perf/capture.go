@@ -1,27 +1,30 @@
 // Package perf produces agent-oriented performance insights about a
 // TypeScript project's type system. It drives a fresh, fully traced compile of
-// the project entirely in memory (no trace files touch disk), then aggregates
-// the resulting Chrome trace events, recorded type descriptors, and compiler
-// statistics into the rankings the `perf` command family reports.
+// the project, then aggregates the resulting Chrome trace events, recorded type
+// descriptors, and compiler statistics into the rankings the `perf` command
+// family reports.
 package perf
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/microsoft/typescript-go/internal/bundled"
 	"github.com/microsoft/typescript-go/internal/compiler"
 	tscore "github.com/microsoft/typescript-go/internal/core"
 	"github.com/microsoft/typescript-go/internal/execute/tsc"
+	"github.com/microsoft/typescript-go/internal/json"
 	"github.com/microsoft/typescript-go/internal/tracing"
 	"github.com/microsoft/typescript-go/internal/tsagent/core"
+	"github.com/microsoft/typescript-go/internal/vfs"
 )
 
-// traceDir is the virtual directory the in-memory tracing sink writes to. It is
-// never created on disk.
+// traceDir is the trace root path exposed through the trace sink.
 const traceDir = "/__tsagent_perf_trace__"
 
 // Options controls what the traced compile measures.
@@ -58,6 +61,7 @@ type Span struct {
 	Name    string
 	DurUS   float64 // microseconds
 	Path    string
+	Line    int
 	Pos     int
 	End     int
 	Kind    int
@@ -78,19 +82,37 @@ type Capture struct {
 	Stats    Stats
 	Spans    []Span
 	Instants []Instant
-	Types    []tracing.TypeDescriptor
-	TypeByID map[uint32]*tracing.TypeDescriptor
+
+	typeCounts      map[string]int // canonical file path -> recorded type count
+	typeOriginIDs   map[uint32]struct{}
+	typeOrigins     map[uint32]typeOrigin
+	hotTypesAll     map[string]*hotTypeAgg
+	hotTypesProject map[string]*hotTypeAgg
 
 	ws       *core.Workspace
 	program  *compiler.Program
 	canonMap map[string]string // any path representation -> canonical FileName()
 }
 
+type typeOrigin struct {
+	canon string
+	line  int
+}
+
+type hotTypeAgg struct {
+	ht         *HotType
+	haveOrigin bool
+}
+
 // Gather builds a fresh traced program from the workspace config, drives all
-// phases to populate the trace, and reads the trace back from the in-memory
-// sink. The workspace's own warm program is left untouched.
+// phases to populate the trace, and reads the trace back from the trace sink.
+// The workspace's own warm program is left untouched.
 func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, error) {
-	traceFS := newMemFS()
+	traceFS, err := newDiskTraceFS()
+	if err != nil {
+		return nil, fmt.Errorf("create trace sink: %w", err)
+	}
+	defer traceFS.Cleanup()
 	tr, err := tracing.StartTracing(traceFS, traceDir, ws.ConfigPath, false)
 	if err != nil {
 		return nil, fmt.Errorf("start tracing: %w", err)
@@ -143,9 +165,13 @@ func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, er
 	runtime.ReadMemStats(&mem)
 
 	c := &Capture{
-		ws:       ws,
-		program:  program,
-		TypeByID: map[uint32]*tracing.TypeDescriptor{},
+		ws:              ws,
+		program:         program,
+		typeCounts:      map[string]int{},
+		typeOriginIDs:   map[uint32]struct{}{},
+		typeOrigins:     map[uint32]typeOrigin{},
+		hotTypesAll:     map[string]*hotTypeAgg{},
+		hotTypesProject: map[string]*hotTypeAgg{},
 		Stats: Stats{
 			Files:          len(files),
 			Lines:          program.LineCount(),
@@ -162,9 +188,20 @@ func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, er
 			Total:          parseDur + bindDur + checkDur + emitDur,
 		},
 	}
-	if err := c.parseTrace(traceFS); err != nil {
+	c.initCanonMap()
+	if err := c.parseTraceEvents(traceFS); err != nil {
 		return nil, err
 	}
+	c.program = nil
+	program = nil
+	files = nil
+	host = nil
+	runtime.GC()
+	runtime.GC()
+	if err := c.parseTraceTypes(traceFS); err != nil {
+		return nil, err
+	}
+	c.typeOriginIDs = nil
 	return c, nil
 }
 
@@ -178,18 +215,11 @@ type traceEnvelopeEvent struct {
 	Args map[string]any `json:"args"`
 }
 
-// parseTrace reads trace.json and the per-checker types_*.json back from the
-// in-memory sink and normalizes them into Spans, Instants, and Types.
-func (c *Capture) parseTrace(fs *memFS) error {
-	raw, ok := fs.ReadFile(traceDir + "/trace.json")
-	if !ok {
-		return fmt.Errorf("perf: trace output missing")
-	}
-	var events []traceEnvelopeEvent
-	if err := json.Unmarshal([]byte(raw), &events); err != nil {
-		return fmt.Errorf("perf: parse trace: %w", err)
-	}
-
+// parseTraceEvents reads trace.json back from the trace sink and normalizes it
+// into Spans and Instants. Type descriptors are parsed separately so the traced
+// compiler Program can be released before large types_N.json payloads are
+// decoded.
+func (c *Capture) parseTraceEvents(fs vfs.FS) error {
 	// Pair begin/end events per thread (LIFO by name) into durations.
 	type openEvent struct {
 		name string
@@ -197,7 +227,13 @@ func (c *Capture) parseTrace(fs *memFS) error {
 		ev   traceEnvelopeEvent
 	}
 	stacks := map[int][]openEvent{}
-	for _, ev := range events {
+
+	dec, done, err := jsonDecoderFor(fs, traceDir+"/trace.json")
+	if err != nil {
+		return err
+	}
+	defer done()
+	if err := readJSONArray(dec, func(ev traceEnvelopeEvent) error {
 		switch ev.PH {
 		case "B":
 			stacks[ev.TID] = append(stacks[ev.TID], openEvent{name: ev.Name, ts: ev.TS, ev: ev})
@@ -207,21 +243,35 @@ func (c *Capture) parseTrace(fs *memFS) error {
 				if stack[i].name == ev.Name {
 					begin := stack[i]
 					stacks[ev.TID] = append(stack[:i], stack[i+1:]...)
-					c.Spans = append(c.Spans, spanFrom(begin.ev, ev.TS-begin.ts, false))
+					c.Spans = append(c.Spans, c.spanFrom(begin.ev, ev.TS-begin.ts, false))
 					break
 				}
 			}
 		case "X":
 			if ev.Dur != nil {
-				c.Spans = append(c.Spans, spanFrom(ev, *ev.Dur, true))
+				sp := c.spanFrom(ev, *ev.Dur, true)
+				if sp.Path == "" {
+					c.recordTypeOriginIDs(sp.Args)
+				}
+				c.Spans = append(c.Spans, sp)
 			}
 		case "I":
 			c.Instants = append(c.Instants, Instant{Phase: ev.Cat, Name: ev.Name, Args: ev.Args})
+			c.recordTypeOriginIDs(ev.Args)
 		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("perf: parse trace: %w", err)
 	}
+	fs.Remove(traceDir + "/trace.json")
+	return nil
+}
 
+// parseTraceTypes reads the per-checker types_*.json files back from the
+// trace sink and aggregates the type data needed by the report.
+func (c *Capture) parseTraceTypes(fs vfs.FS) error {
 	// Read recorded type descriptors from every checker's types_N.json. The
-	// legend lists them; fall back to a key scan if absent.
+	// trace legend lists the checker-specific type files.
 	var typePaths []string
 	if legend, ok := fs.ReadFile(traceDir + "/legend.json"); ok {
 		var records []tracing.TraceRecord
@@ -234,24 +284,130 @@ func (c *Capture) parseTrace(fs *memFS) error {
 		}
 	}
 	for _, p := range typePaths {
-		data, ok := fs.ReadFile(p)
-		if !ok {
+		dec, done, err := jsonDecoderFor(fs, p)
+		if err != nil {
 			continue
 		}
-		var descs []tracing.TypeDescriptor
-		if err := json.Unmarshal([]byte(data), &descs); err != nil {
+		err = readJSONArray(dec, func(desc tracing.TypeDescriptor) error {
+			c.recordTypeDescriptor(&desc)
+			return nil
+		})
+		done()
+		if err != nil {
 			continue
 		}
-		c.Types = append(c.Types, descs...)
-	}
-	for i := range c.Types {
-		c.TypeByID[c.Types[i].ID] = &c.Types[i]
+		fs.Remove(p)
 	}
 	return nil
 }
 
-func spanFrom(ev traceEnvelopeEvent, durUS float64, sampled bool) Span {
-	s := Span{Phase: ev.Cat, Name: ev.Name, DurUS: durUS, Sampled: sampled, Args: ev.Args}
+func (c *Capture) recordTypeDescriptor(desc *tracing.TypeDescriptor) {
+	var origin *typeOrigin
+	if desc.FirstDeclaration != nil {
+		canon := c.canonical(desc.FirstDeclaration.Path)
+		o := typeOrigin{canon: canon}
+		if desc.FirstDeclaration.Start != nil {
+			o.line = desc.FirstDeclaration.Start.Line
+		}
+		if _, needed := c.typeOriginIDs[desc.ID]; needed {
+			c.typeOrigins[desc.ID] = o
+		}
+		c.typeCounts[canon]++
+		origin = &o
+	}
+
+	name := desc.SymbolName
+	if name == "" {
+		name = desc.IntrinsicName
+	}
+	if name == "" {
+		return
+	}
+	c.recordHotType(c.hotTypesAll, name, desc, origin)
+	if origin != nil && c.inProject(origin.canon) {
+		c.recordHotType(c.hotTypesProject, name, desc, origin)
+	}
+}
+
+func (c *Capture) recordHotType(m map[string]*hotTypeAgg, name string, desc *tracing.TypeDescriptor, origin *typeOrigin) {
+	a := m[name]
+	if a == nil {
+		a = &hotTypeAgg{ht: &HotType{Symbol: name}}
+		m[name] = a
+	}
+	a.ht.Count++
+	if len(desc.UnionTypes) > a.ht.MaxUnion {
+		a.ht.MaxUnion = len(desc.UnionTypes)
+	}
+	if hasString(desc.Flags, "Conditional") {
+		a.ht.Conditional++
+	}
+	if !a.haveOrigin && origin != nil {
+		a.ht.File = c.display(origin.canon)
+		a.ht.Line = origin.line
+		a.haveOrigin = true
+	}
+}
+
+func hasString(values []string, value string) bool {
+	for _, v := range values {
+		if v == value {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Capture) recordTypeOriginIDs(args map[string]any) {
+	for _, key := range []string{"typeId", "sourceId", "targetId"} {
+		if id, ok := argUint(args, key); ok {
+			c.typeOriginIDs[id] = struct{}{}
+		}
+	}
+}
+
+func jsonDecoderFor(fs vfs.FS, path string) (*json.Decoder, func(), error) {
+	if d, ok := fs.(*diskTraceFS); ok {
+		real := d.real(path)
+		f, err := os.Open(real)
+		if err != nil {
+			return nil, func() {}, fmt.Errorf("perf: trace output missing: %w", err)
+		}
+		return json.NewDecoder(f), func() { _ = f.Close() }, nil
+	}
+	raw, ok := fs.ReadFile(path)
+	if !ok {
+		return nil, func() {}, fmt.Errorf("perf: trace output missing")
+	}
+	return json.NewDecoder(strings.NewReader(raw)), func() {}, nil
+}
+
+func readJSONArray[T any](dec *json.Decoder, each func(T) error) error {
+	token, err := dec.ReadToken()
+	if err != nil {
+		if err == io.EOF {
+			return fmt.Errorf("empty JSON input")
+		}
+		return err
+	}
+	if token.Kind() != json.BeginArray.Kind() {
+		return fmt.Errorf("expected JSON array, got %q", token.Kind())
+	}
+	for dec.PeekKind() != json.EndArray.Kind() {
+		var item T
+		if err := json.UnmarshalDecode(dec, &item); err != nil {
+			return err
+		}
+		if err := each(item); err != nil {
+			return err
+		}
+	}
+	_, err = dec.ReadToken()
+	return err
+}
+
+func (c *Capture) spanFrom(ev traceEnvelopeEvent, durUS float64, sampled bool) Span {
+	s := Span{Phase: ev.Cat, Name: ev.Name, DurUS: durUS, Sampled: sampled}
 	if ev.Args != nil {
 		if p, ok := ev.Args["path"].(string); ok {
 			s.Path = p
@@ -259,6 +415,12 @@ func spanFrom(ev traceEnvelopeEvent, durUS float64, sampled bool) Span {
 		s.Pos = argInt(ev.Args, "pos")
 		s.End = argInt(ev.Args, "end")
 		s.Kind = argInt(ev.Args, "kind")
+		if sampled && s.Path != "" && s.Pos > 0 {
+			s.Line = c.lineOf(s.Path, s.Pos)
+		}
+		if sampled && s.Path == "" {
+			s.Args = ev.Args
+		}
 	}
 	return s
 }

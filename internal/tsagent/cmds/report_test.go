@@ -68,6 +68,51 @@ func TestReportExpensiveGating(t *testing.T) {
 	}
 }
 
+func TestReportPerfCommandUsesConfigOnlyWorkspace(t *testing.T) {
+	cmd, ok := cli.Lookup("report", "perf")
+	if !ok {
+		t.Fatal("report perf command not registered")
+	}
+	if !cmd.NeedsProgram || !cmd.ConfigOnly {
+		t.Fatalf("report perf NeedsProgram/ConfigOnly = %v/%v, want true/true", cmd.NeedsProgram, cmd.ConfigOnly)
+	}
+}
+
+func TestPerfCommandsUseConfigOnlyWorkspace(t *testing.T) {
+	for _, name := range []string{"summary", "hot-files", "hot-types", "hot-checks", "depth-limits"} {
+		cmd, ok := cli.Lookup("perf", name)
+		if !ok {
+			t.Fatalf("perf %s command not registered", name)
+		}
+		if !cmd.NeedsProgram || !cmd.ConfigOnly {
+			t.Fatalf("perf %s NeedsProgram/ConfigOnly = %v/%v, want true/true", name, cmd.NeedsProgram, cmd.ConfigOnly)
+		}
+	}
+}
+
+func TestPerfCaptureFlagsDefaultToLowMemory(t *testing.T) {
+	if !((&captureFlags{}).options().SingleThreaded) {
+		t.Fatal("perf capture should default to single-threaded")
+	}
+	if (&captureFlags{parallelPerf: true}).options().SingleThreaded {
+		t.Fatal("--parallel-perf should opt into parallel capture")
+	}
+	if !((&captureFlags{parallelPerf: true, singleThreaded: true}).options().SingleThreaded) {
+		t.Fatal("--single-threaded should win over --parallel-perf")
+	}
+}
+
+func TestGenericReportPerfIncludeUsesConfigOnlyWorkspace(t *testing.T) {
+	if !((&reportOptions{include: "perf"}).ConfigOnlyWorkspace()) {
+		t.Fatal("generic report --include perf should use a config-only workspace")
+	}
+	for _, include := range []string{"", "perf,duplicates", "duplicates", "bogus"} {
+		if (&reportOptions{include: include}).ConfigOnlyWorkspace() {
+			t.Fatalf("include %q should not use a config-only workspace", include)
+		}
+	}
+}
+
 func TestReportStructureMeasurements(t *testing.T) {
 	ws := newTestWorkspace(t, map[string]any{
 		"/project/src/a.ts": "// header line one\n// header line two\n" +
@@ -123,6 +168,59 @@ func TestReportRunWritesFileAndManifest(t *testing.T) {
 	}
 }
 
+func TestReportBuildsPerfLastButPreservesPageOrder(t *testing.T) {
+	ws := newTestWorkspace(t, map[string]any{"/project/src/a.ts": "export const x = 1;\n"})
+	var buildOrder []string
+	provs := []reportProvider{
+		{
+			Key: "perf",
+			Build: func(ctx context.Context, ws *core.Workspace, o reportOptions) ([]*report.Page, error) {
+				buildOrder = append(buildOrder, "perf")
+				if ws.Program != nil || ws.LS != nil || ws.Conv != nil {
+					t.Fatal("perf provider should run after releasing the workspace program")
+				}
+				return []*report.Page{{ID: "perf", Label: "Performance"}}, nil
+			},
+		},
+		{
+			Key: "file-size",
+			Build: func(ctx context.Context, ws *core.Workspace, o reportOptions) ([]*report.Page, error) {
+				buildOrder = append(buildOrder, "file-size")
+				if ws.Program == nil {
+					t.Fatal("non-perf provider should run before releasing the workspace program")
+				}
+				return []*report.Page{{ID: "file-size", Label: "File size"}}, nil
+			},
+		},
+	}
+
+	pages, failures := buildReportPages(context.Background(), ws, provs, reportOptions{})
+	if len(failures) != 0 {
+		t.Fatalf("unexpected failures: %v", failures)
+	}
+	if got := strings.Join(buildOrder, ","); got != "file-size,perf" {
+		t.Fatalf("build order = %s, want file-size,perf", got)
+	}
+	if len(pages) != 2 || pages[0].ID != "perf" || pages[1].ID != "file-size" {
+		t.Fatalf("page order = %v, want [perf file-size]", pageIDs(pages))
+	}
+}
+
+func TestReleaseWorkspaceProgramSkipsPersistentWorkspace(t *testing.T) {
+	ws := newTestWorkspace(t, map[string]any{"/project/src/a.ts": "export const x = 1;\n"})
+	ws.Releasable = false
+	releaseWorkspaceProgram(ws)
+	if ws.Program == nil || ws.LS == nil || ws.Conv == nil {
+		t.Fatal("persistent workspace should not be released")
+	}
+
+	ws.Releasable = true
+	releaseWorkspaceProgram(ws)
+	if ws.Program != nil || ws.LS != nil || ws.Conv != nil {
+		t.Fatal("releasable workspace should drop program, language service, and converters")
+	}
+}
+
 func keysOf(provs []reportProvider) []string {
 	out := make([]string, len(provs))
 	for i, p := range provs {
@@ -138,4 +236,12 @@ func containsKey(provs []reportProvider, key string) bool {
 		}
 	}
 	return false
+}
+
+func pageIDs(pages []*report.Page) []string {
+	out := make([]string, len(pages))
+	for i, p := range pages {
+		out[i] = p.ID
+	}
+	return out
 }

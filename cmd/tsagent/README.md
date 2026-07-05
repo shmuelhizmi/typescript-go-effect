@@ -263,17 +263,17 @@ shape  (declared: Shape)  src/shapes.ts
 
 ### `perf` — type-system performance insights
 
-Each `perf` command runs a fresh, fully traced compile of the project entirely in memory (no trace files are written to disk), then aggregates the trace, the recorded type descriptors, and the compiler statistics into agent-actionable rankings. The ranking commands default to the user's own files; pass `--include-libs` to fold in bundled libs and `node_modules`. The `perf` family is text-only; for the HTML performance report see [`report perf`](#report--multi-page-html-reports).
+Each `perf` command runs a fresh, fully traced compile of the project, then aggregates the trace, the recorded type descriptors, and the compiler statistics into agent-actionable rankings. The ranking commands default to the user's own files; pass `--include-libs` to fold in bundled libs and `node_modules`. Perf capture defaults to one checker worker for lower peak memory; pass `--parallel-perf` to opt into parallel checker workers. The `perf` family is text-only; for the HTML performance report see [`report perf`](#report--multi-page-html-reports).
 
 | Command | Description | Flags |
 |---|---|---|
-| `perf summary` | Phase budget (parse/bind/check/emit split), project counters, and a one-line bottleneck verdict | `--emit`, `--single-threaded` |
-| `perf hot-files` | Files ranked by compiler time (parse/bind/check) and recorded type count | `--top N` (default 50), `--include-libs`, `--emit`, `--single-threaded` |
-| `perf hot-types` | Generics/aliases ranked by how many distinct types they instantiate (instantiation spread), with conditional/union signals | `--top N` (default 50), `--include-libs`, `--emit`, `--single-threaded` |
-| `perf hot-checks` | Individual checker operations the tracer sampled as slow (>~10ms), located back to a file | `--top N` (default 50), `--emit`, `--single-threaded` |
-| `perf depth-limits` | Type explosions that tripped an instantiation/recursion/union-size guard — the highest-value fixes | `--emit`, `--single-threaded` |
+| `perf summary` | Phase budget (parse/bind/check/emit split), project counters, and a one-line bottleneck verdict | `--emit`, `--single-threaded`, `--parallel-perf` |
+| `perf hot-files` | Files ranked by compiler time (parse/bind/check) and recorded type count | `--top N` (default 50), `--include-libs`, `--emit`, `--single-threaded`, `--parallel-perf` |
+| `perf hot-types` | Generics/aliases ranked by how many distinct types they instantiate (instantiation spread), with conditional/union signals | `--top N` (default 50), `--include-libs`, `--emit`, `--single-threaded`, `--parallel-perf` |
+| `perf hot-checks` | Individual checker operations the tracer sampled as slow (>~10ms), located back to a file | `--top N` (default 50), `--emit`, `--single-threaded`, `--parallel-perf` |
+| `perf depth-limits` | Type explosions that tripped an instantiation/recursion/union-size guard — the highest-value fixes | `--emit`, `--single-threaded`, `--parallel-perf` |
 
-Shared flags: `--emit` also measures the emit phase (declaration-emit cost); `--single-threaded` uses one checker for cleaner per-file timing attribution at the cost of wall-clock speed.
+Shared flags: `--emit` also measures the emit phase (declaration-emit cost); `--single-threaded` is accepted for explicit low-memory capture; `--parallel-perf` opts into parallel checker workers at higher peak memory.
 
 `perf summary` on the fixture:
 
@@ -297,7 +297,7 @@ The `report` family renders **self-contained, multi-page HTML** dashboards: one 
 | `report full` | Every group at once (perf + quality + structure) |
 | `report --include a,b,c` | An explicit set of items, e.g. `--include perf,duplicates,file-size` |
 
-Shared flags: `--out <path>` (default `tsagent-report.html`) · `--top N` (rows per ranking table, default 25) · perf-capture knobs `--emit` / `--single-threaded` / `--include-libs` (forwarded to the perf item). The two expensive analyses — `dead-code` and `churn-risk` (project-wide find-all-references; churn also shells to git) — are **opt-in**: add `--include-expensive` to a preset, or name them in `--include`. Unknown `--include` items exit 2 with the list of known items. Per-item failures are non-fatal: the report is still written with the pages that succeeded and the command exits 5 (partial).
+Shared flags: `--out <path>` (default `tsagent-report.html`) · `--top N` (rows per ranking table, default 25) · perf-capture knobs `--emit` / `--single-threaded` / `--parallel-perf` / `--include-libs` (forwarded to the perf item). The two expensive analyses — `dead-code` and `churn-risk` (project-wide find-all-references; churn also shells to git) — are **opt-in**: add `--include-expensive` to a preset, or name them in `--include`. Unknown `--include` items exit 2 with the list of known items. Per-item failures are non-fatal: the report is still written with the pages that succeeded and the command exits 5 (partial).
 
 Item keys for `--include`: `perf`, `duplicates`, `complexity`, `assertions`, `exhaustiveness`, `barrel-cost`, `side-effects`, `unused-deps`, `dead-code`, `churn-risk`, `file-size`, `comments`, `functions`, `dir-stats`.
 

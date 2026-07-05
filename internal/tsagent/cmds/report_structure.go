@@ -207,8 +207,9 @@ func init() {
 				maxLoc = d.loc
 			}
 		}
-		rows := make([]report.Row, 0, len(order))
-		for _, name := range order {
+		topOrder := topNSlice(order, o.top)
+		rows := make([]report.Row, 0, len(topOrder))
+		for _, name := range topOrder {
 			e := dirs[name]
 			pct := 0.0
 			if e.loc > 0 {

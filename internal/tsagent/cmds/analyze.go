@@ -522,6 +522,68 @@ func runAnalyzeAssertions(ctx context.Context, ws *core.Workspace, flags *assert
 	return result, nil
 }
 
+func runAnalyzeAssertionCounts(ws *core.Workspace, args []string) (*AssertionsResult, error) {
+	files, err := projectFiles(ws, args)
+	if err != nil {
+		return nil, err
+	}
+	result := &AssertionsResult{Totals: make(map[string]int)}
+	for _, file := range files {
+		counts := collectAssertionCounts(file)
+		if len(counts) == 0 {
+			continue
+		}
+		for kind, n := range counts {
+			result.Totals[kind] += n
+		}
+		result.Files = append(result.Files, &AssertionsFileCounts{File: ws.RelPath(file.FileName()), Counts: counts})
+	}
+	return result, nil
+}
+
+func collectAssertionCounts(file *ast.SourceFile) map[string]int {
+	counts := make(map[string]int)
+	var visit ast.Visitor
+	visit = func(node *ast.Node) bool {
+		if kind := assertionKind(node); kind != "" {
+			counts[kind]++
+		}
+		node.ForEachChild(visit)
+		return false
+	}
+	file.AsNode().ForEachChild(visit)
+
+	for _, directive := range file.CommentDirectives {
+		kind := "ts-ignore"
+		if directive.Kind == ast.CommentDirectiveKindExpectError {
+			kind = "ts-expect-error"
+		}
+		counts[kind]++
+	}
+	if file.CheckJsDirective != nil && !file.CheckJsDirective.Enabled {
+		counts["ts-nocheck"]++
+	}
+	return counts
+}
+
+func assertionKind(node *ast.Node) string {
+	switch node.Kind {
+	case ast.KindAsExpression, ast.KindTypeAssertionExpression:
+		if ast.IsConstAssertion(node) {
+			return "as-const"
+		}
+		if node.Kind == ast.KindTypeAssertionExpression {
+			return "type-assertion"
+		}
+		return "as"
+	case ast.KindSatisfiesExpression:
+		return "satisfies"
+	case ast.KindNonNullExpression:
+		return "non-null"
+	}
+	return ""
+}
+
 // collectAssertions walks one file (with its checker held) collecting every
 // assertion site plus the file's comment directives. Only strings escape the
 // checker acquisition.
@@ -551,13 +613,7 @@ func collectAssertions(ws *core.Workspace, c *checker.Checker, file *ast.SourceF
 	visit = func(node *ast.Node) bool {
 		switch node.Kind {
 		case ast.KindAsExpression, ast.KindTypeAssertionExpression:
-			kind := "as"
-			if node.Kind == ast.KindTypeAssertionExpression {
-				kind = "type-assertion"
-			}
-			if ast.IsConstAssertion(node) {
-				kind = "as-const"
-			}
+			kind := assertionKind(node)
 			row := newRow(nodeStart(node), kind, nodeText(node))
 			if kind != "as-const" {
 				row.FromType = typeDisplay(node.Expression())
@@ -1115,8 +1171,9 @@ func matchesPathAlias(options *tscore.CompilerOptions, specifier string) bool {
 // analyze complexity
 
 type analyzeComplexityFlags struct {
-	top       int
-	threshold float64
+	top                int
+	threshold          float64
+	typeCandidateLimit int
 }
 
 // FunctionComplexity is the complexity report of one function.
@@ -1154,36 +1211,71 @@ func runAnalyzeComplexity(ctx context.Context, ws *core.Workspace, flags *analyz
 		return nil, err
 	}
 	result := &AnalyzeComplexityResult{}
+	type candidate struct {
+		entry *FunctionComplexity
+		file  *ast.SourceFile
+		fn    *ast.Node
+	}
+	var candidates []candidate
 	for _, file := range files {
 		binder.BindSourceFile(file)
 		functions := functionLikeNodesWithBody(file)
 		if len(functions) == 0 {
 			continue
 		}
-		fileChecker, done := ws.Program.GetTypeCheckerForFile(ctx, file)
 		for _, fn := range functions {
 			cyclomatic, cognitive := branchMetrics(fn.Body())
-			typeComplexity := 0
-			if t := fileChecker.GetTypeAtLocation(fn); t != nil {
-				typeComplexity = core.Complexity(fileChecker, t)
-			}
 			pos := astnav.GetStartOfNode(fn, file, false /*includeJSDoc*/)
 			if name := ast.GetNameOfDeclaration(fn); name != nil {
 				pos = astnav.GetStartOfNode(name, file, false /*includeJSDoc*/)
 			}
 			line, _ := ws.PosToLineCol(file, pos)
-			result.Entries = append(result.Entries, &FunctionComplexity{
+			entry := &FunctionComplexity{
 				SymbolID:       core.EncodeSymbolID(ws, fn.Symbol()),
 				Name:           functionDisplayName(fn),
 				File:           ws.RelPath(file.FileName()),
 				Line:           line,
 				Cyclomatic:     cyclomatic,
 				Cognitive:      cognitive,
-				TypeComplexity: typeComplexity,
-				Score:          float64(cyclomatic+cognitive) + float64(typeComplexity)/10,
-			})
+				TypeComplexity: 0,
+				Score:          float64(cyclomatic + cognitive),
+			}
+			result.Entries = append(result.Entries, entry)
+			candidates = append(candidates, candidate{entry: entry, file: file, fn: fn})
 		}
-		done()
+	}
+
+	if flags.typeCandidateLimit > 0 && len(candidates) > flags.typeCandidateLimit {
+		slices.SortStableFunc(candidates, func(a, b candidate) int {
+			if a.entry.Score != b.entry.Score {
+				if a.entry.Score < b.entry.Score {
+					return 1
+				}
+				return -1
+			}
+			if c := strings.Compare(a.entry.File, b.entry.File); c != 0 {
+				return c
+			}
+			return a.entry.Line - b.entry.Line
+		})
+		candidates = candidates[:flags.typeCandidateLimit]
+	}
+
+	if len(candidates) > 0 {
+		candidatesByFile := make(map[*ast.SourceFile][]candidate)
+		for _, cand := range candidates {
+			candidatesByFile[cand.file] = append(candidatesByFile[cand.file], cand)
+		}
+		for file, fileCandidates := range candidatesByFile {
+			fileChecker, done := ws.Program.GetTypeCheckerForFile(ctx, file)
+			for _, cand := range fileCandidates {
+				if t := fileChecker.GetTypeAtLocation(cand.fn); t != nil {
+					cand.entry.TypeComplexity = core.Complexity(fileChecker, t)
+					cand.entry.Score = float64(cand.entry.Cyclomatic+cand.entry.Cognitive) + float64(cand.entry.TypeComplexity)/10
+				}
+			}
+			done()
+		}
 	}
 
 	if flags.threshold > 0 {

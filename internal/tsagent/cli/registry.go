@@ -25,6 +25,10 @@ type Command struct {
 	Run func(ctx context.Context, ws *core.Workspace, flags any, args []string) (any, error)
 	// NeedsProgram is false for pure commands (e.g. daemon admin).
 	NeedsProgram bool
+	// ConfigOnly asks the CLI to parse the project config without constructing
+	// the normal Program/LanguageService. This is for commands that build their
+	// own specialized program, such as traced perf capture.
+	ConfigOnly bool
 }
 
 var (

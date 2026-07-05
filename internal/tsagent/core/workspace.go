@@ -33,6 +33,10 @@ type Workspace struct {
 	Program *compiler.Program
 	LS      *ls.LanguageService
 	Conv    *lsconv.Converters
+	// Releasable is true for one-shot CLI workspaces whose Program/LS can be
+	// dropped before a memory-heavy command builds its own program. Persistent
+	// session workspaces must keep this false.
+	Releasable bool
 }
 
 // Options configures workspace construction.
@@ -47,6 +51,10 @@ type Options struct {
 	FS vfs.FS
 	// SingleThreaded forces single-threaded program construction (tests).
 	SingleThreaded bool
+	// ConfigOnly parses the tsconfig but skips Program/LanguageService construction.
+	ConfigOnly bool
+	// Persistent marks a workspace as owned by a long-lived session.
+	Persistent bool
 }
 
 type parseConfigHost struct {
@@ -88,6 +96,18 @@ func NewWorkspace(opts Options) (*Workspace, error) {
 		return nil, fmt.Errorf("failed to parse %s: %s", configPath, diagnosticMessages(diags))
 	}
 
+	ws := &Workspace{
+		ConfigPath: configPath,
+		RootDir:    tspath.GetDirectoryPath(configPath),
+		Cwd:        cwd,
+		FS:         fs,
+		Config:     config,
+		Releasable: !opts.Persistent,
+	}
+	if opts.ConfigOnly {
+		return ws, nil
+	}
+
 	host := compiler.NewCachedFSCompilerHost(cwd, fs, bundled.LibPath(), configCache, nil)
 	program := compiler.NewProgram(compiler.ProgramOptions{
 		Config:         config,
@@ -95,14 +115,7 @@ func NewWorkspace(opts Options) (*Workspace, error) {
 		SingleThreaded: core.IfElse(opts.SingleThreaded, core.TSTrue, core.TSUnknown),
 	})
 
-	ws := &Workspace{
-		ConfigPath: configPath,
-		RootDir:    tspath.GetDirectoryPath(configPath),
-		Cwd:        cwd,
-		FS:         fs,
-		Config:     config,
-		Program:    program,
-	}
+	ws.Program = program
 	lsHost := newLSHost(ws)
 	ws.Conv = lsHost.Converters()
 	projectPath := tspath.ToPath(configPath, cwd, fs.UseCaseSensitiveFileNames())
