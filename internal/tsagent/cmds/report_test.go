@@ -100,6 +100,9 @@ func TestPerfCaptureFlagsDefaultToLowMemory(t *testing.T) {
 	if !((&captureFlags{parallelPerf: true, singleThreaded: true}).options().SingleThreaded) {
 		t.Fatal("--single-threaded should win over --parallel-perf")
 	}
+	if !((&captureFlags{includeLibs: true}).options().IncludeLibs) {
+		t.Fatal("--include-libs should preserve all hot-type origins")
+	}
 }
 
 func TestGenericReportPerfIncludeUsesConfigOnlyWorkspace(t *testing.T) {

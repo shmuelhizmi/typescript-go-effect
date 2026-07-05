@@ -98,6 +98,67 @@ func TestTypeDisplayCanBeDisabled(t *testing.T) {
 	}
 }
 
+func TestStopTracingReleasesTypeTracerTypes(t *testing.T) {
+	t.Parallel()
+
+	fsys := vfstest.FromMap(fstest.MapFS{
+		"/trace": &fstest.MapFile{Mode: fs.ModeDir},
+	}, true)
+
+	tr, err := StartTracingWithOptions(fsys, "/trace", "", true /*deterministic*/, Options{IncludeTypeDisplay: false})
+	assert.NilError(t, err)
+	tracer := tr.NewTypeTracer(0)
+	typedTracer := tracer.(*typeTracer)
+	tracer.RecordType(testTracedType{id: 1})
+	assert.Equal(t, len(typedTracer.types), 1)
+
+	assert.NilError(t, tr.StopTracing())
+	assert.Equal(t, len(typedTracer.types), 0)
+	assert.Equal(t, len(tr.tracers), 0)
+}
+
+func TestStreamedTypeDescriptorsDoNotRetainTypes(t *testing.T) {
+	t.Parallel()
+
+	fsys := vfstest.FromMap(fstest.MapFS{
+		"/trace": &fstest.MapFile{Mode: fs.ModeDir},
+	}, true)
+
+	tr, err := StartTracingWithOptions(fsys, "/trace", "", true /*deterministic*/, Options{
+		IncludeTypeDisplay:    false,
+		StreamTypeDescriptors: true,
+	})
+	assert.NilError(t, err)
+	tracer := tr.NewTypeTracer(0)
+	typedTracer := tracer.(*typeTracer)
+	tracer.RecordType(testTracedType{id: 1})
+	assert.Equal(t, len(typedTracer.types), 1)
+
+	assert.NilError(t, tr.FlushTypeDescriptors())
+	assert.Equal(t, len(typedTracer.types), 0)
+	assert.Equal(t, typedTracer.typeCount, 1)
+
+	assert.NilError(t, tr.StopTracing())
+	typesText, ok := fsys.ReadFile("/trace/types_0.json")
+	assert.Assert(t, ok)
+	assert.Assert(t, strings.Contains(typesText, `"id":1`))
+	assert.Equal(t, len(typedTracer.types), 0)
+}
+
+func TestStreamedTypeDescriptorsRejectDisplayStrings(t *testing.T) {
+	t.Parallel()
+
+	fsys := vfstest.FromMap(fstest.MapFS{
+		"/trace": &fstest.MapFile{Mode: fs.ModeDir},
+	}, true)
+
+	_, err := StartTracingWithOptions(fsys, "/trace", "", true /*deterministic*/, Options{
+		IncludeTypeDisplay:    true,
+		StreamTypeDescriptors: true,
+	})
+	assert.ErrorContains(t, err, "cannot include type display")
+}
+
 type testTracedType struct {
 	id      uint32
 	display string

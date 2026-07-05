@@ -47,6 +47,33 @@ func TestRecordTypeDescriptorStoresOnlyNeededOrigins(t *testing.T) {
 	}
 }
 
+func TestRecordTypeDescriptorCanSkipAllHotTypes(t *testing.T) {
+	c := &Capture{
+		typeCounts:      map[string]int{},
+		typeOriginIDs:   map[uint32]struct{}{},
+		typeOrigins:     map[uint32]typeOrigin{},
+		hotTypesProject: map[string]*hotTypeAgg{},
+	}
+
+	c.recordTypeDescriptor(&tracing.TypeDescriptor{
+		ID:         1,
+		SymbolName: "ProjectType",
+		FirstDeclaration: &tracing.Location{
+			Path: "/project/src/project.ts",
+		},
+	})
+
+	if c.hotTypesAll != nil {
+		t.Fatal("all hot-type aggregation should remain disabled")
+	}
+	if got := c.HotTypes(false); len(got) != 1 || got[0].Symbol != "ProjectType" {
+		t.Fatalf("project hot types = %#v, want ProjectType", got)
+	}
+	if got := c.HotTypes(true); len(got) != 1 || got[0].Symbol != "ProjectType" {
+		t.Fatalf("include-libs on a project-only capture = %#v, want project fallback", got)
+	}
+}
+
 func TestSpanFromRetainsOnlyNeededArgs(t *testing.T) {
 	c := &Capture{}
 	withPath := traceEnvelopeEvent{

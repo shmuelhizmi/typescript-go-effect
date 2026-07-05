@@ -35,7 +35,7 @@ func (f *captureFlags) registerScoped(fs *flag.FlagSet) {
 }
 
 func (f *captureFlags) options() perf.Options {
-	return perf.Options{Emit: f.emit, SingleThreaded: f.singleThreaded || !f.parallelPerf}
+	return perf.Options{Emit: f.emit, SingleThreaded: f.singleThreaded || !f.parallelPerf, IncludeLibs: f.includeLibs}
 }
 
 func capture(ctx context.Context, ws *core.Workspace, f *captureFlags) (*perf.Capture, error) {

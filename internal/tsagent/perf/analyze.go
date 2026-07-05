@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	tscore "github.com/microsoft/typescript-go/internal/core"
 	"github.com/microsoft/typescript-go/internal/scanner"
 )
 
@@ -152,7 +153,7 @@ type HotType struct {
 // counted.
 func (c *Capture) HotTypes(includeLibs bool) []*HotType {
 	byName := c.hotTypesProject
-	if includeLibs {
+	if includeLibs && c.hotTypesAll != nil {
 		byName = c.hotTypesAll
 	}
 	out := make([]*HotType, 0, len(byName))
@@ -192,7 +193,9 @@ func (c *Capture) HotChecks() []*HotCheck {
 		hc := &HotCheck{Name: sp.Name, Phase: sp.Phase, DurMS: sp.DurUS / 1000}
 		if sp.Path != "" {
 			hc.File = c.display(c.canonical(sp.Path))
-			hc.Line = sp.Line
+			if sp.Pos > 0 {
+				hc.Line = c.lineOf(sp.Path, sp.Pos)
+			}
 		} else if sp.Args != nil {
 			if loc := c.fileOfTypeArgs(*sp.Args); loc != "" {
 				hc.File = loc
@@ -302,18 +305,30 @@ func (c *Capture) display(canon string) string {
 }
 
 func (c *Capture) lineOf(path string, pos int) int {
-	if c.program == nil {
+	if c.ws == nil || pos <= 0 {
 		return 0
 	}
-	file := c.program.GetSourceFile(c.canonical(path))
-	if file == nil {
-		file = c.program.GetSourceFile(path)
+	canon := c.canonical(path)
+	if c.lineStarts == nil {
+		c.lineStarts = map[string]tscore.ECMALineStarts{}
 	}
-	if file == nil {
+	lineStarts, ok := c.lineStarts[canon]
+	if !ok {
+		text, found := c.ws.FS.ReadFile(canon)
+		if !found && canon != path {
+			text, found = c.ws.FS.ReadFile(path)
+		}
+		if !found {
+			c.lineStarts[canon] = nil
+			return 0
+		}
+		lineStarts = tscore.ComputeECMALineStarts(text)
+		c.lineStarts[canon] = lineStarts
+	}
+	if len(lineStarts) == 0 {
 		return 0
 	}
-	line, _ := scanner.GetECMALineAndUTF16CharacterOfPosition(file, pos)
-	return line + 1
+	return scanner.ComputeLineOfPosition(lineStarts, pos) + 1
 }
 
 func pct(part, total float64) float64 {

@@ -82,6 +82,10 @@ type Options struct {
 	// the normal --generateTrace shape, but callers that only need type IDs,
 	// flags, and declarations can disable it to avoid expensive TypeToString work.
 	IncludeTypeDisplay bool
+	// StreamTypeDescriptors writes type descriptors as types are recorded instead
+	// of retaining TracedType references until StopTracing. It is only supported
+	// when IncludeTypeDisplay is false, because Display() can re-enter the checker.
+	StreamTypeDescriptors bool
 }
 
 type traceEvent struct {
@@ -124,22 +128,23 @@ const typeFlushThreshold = 8 * 1024 * 1024
 
 // Tracing manages the overall tracing session including all checkers
 type Tracing struct {
-	fs                 vfs.FS
-	traceDir           string
-	tracePath          string
-	configFilePath     string
-	legend             []TraceRecord
-	tracers            []*typeTracer
-	traceContent       strings.Builder
-	traceStarted       atomic.Bool
-	threadIDs          map[traceThreadKey]int
-	threadKeys         map[int]traceThreadKey
-	metadataTS         float64
-	deterministic      bool // when true, use monotonic counter instead of real time
-	includeTypeDisplay bool
-	timestampCounter   uint64 // only used in deterministic mode
-	startTime          time.Time
-	mu                 sync.Mutex
+	fs                    vfs.FS
+	traceDir              string
+	tracePath             string
+	configFilePath        string
+	legend                []TraceRecord
+	tracers               []*typeTracer
+	traceContent          strings.Builder
+	traceStarted          atomic.Bool
+	threadIDs             map[traceThreadKey]int
+	threadKeys            map[int]traceThreadKey
+	metadataTS            float64
+	deterministic         bool // when true, use monotonic counter instead of real time
+	includeTypeDisplay    bool
+	streamTypeDescriptors bool
+	timestampCounter      uint64 // only used in deterministic mode
+	startTime             time.Time
+	mu                    sync.Mutex
 	// flushErr holds the first error encountered while appending the trace buffer
 	// to disk. Once set, subsequent flushes become no-ops and the error is
 	// surfaced from StopTracing so that transient I/O failures (disk full,
@@ -171,18 +176,22 @@ func StartTracing(fs vfs.FS, traceDir string, configFilePath string, determinist
 // controls. Most callers should use StartTracing to preserve default trace
 // contents.
 func StartTracingWithOptions(fs vfs.FS, traceDir string, configFilePath string, deterministic bool, opts Options) (*Tracing, error) {
+	if opts.StreamTypeDescriptors && opts.IncludeTypeDisplay {
+		return nil, fmt.Errorf("streaming type descriptors cannot include type display strings")
+	}
 	tr := &Tracing{
-		fs:                 fs,
-		traceDir:           traceDir,
-		tracePath:          tspath.CombinePaths(traceDir, traceFileName),
-		configFilePath:     configFilePath,
-		legend:             []TraceRecord{},
-		tracers:            []*typeTracer{},
-		threadIDs:          make(map[traceThreadKey]int),
-		threadKeys:         make(map[int]traceThreadKey),
-		deterministic:      deterministic,
-		includeTypeDisplay: opts.IncludeTypeDisplay,
-		startTime:          time.Now(),
+		fs:                    fs,
+		traceDir:              traceDir,
+		tracePath:             tspath.CombinePaths(traceDir, traceFileName),
+		configFilePath:        configFilePath,
+		legend:                []TraceRecord{},
+		tracers:               []*typeTracer{},
+		threadIDs:             make(map[traceThreadKey]int),
+		threadKeys:            make(map[int]traceThreadKey),
+		deterministic:         deterministic,
+		includeTypeDisplay:    opts.IncludeTypeDisplay,
+		streamTypeDescriptors: opts.StreamTypeDescriptors,
+		startTime:             time.Now(),
 	}
 	tr.traceStarted.Store(true)
 
@@ -444,6 +453,7 @@ func (tr *Tracing) NewTypeTracer(checkerIndex int) Tracer {
 		checkerIndex:       checkerIndex,
 		typesPath:          typesPath,
 		includeTypeDisplay: tr.includeTypeDisplay,
+		streamDescriptors:  tr.streamTypeDescriptors,
 		types:              []TracedType{},
 	}
 	tr.tracers = append(tr.tracers, tracer)
@@ -456,6 +466,19 @@ func (tr *Tracing) NewTypeTracer(checkerIndex int) Tracer {
 	return tracer
 }
 
+// FlushTypeDescriptors streams and releases any type descriptors recorded so
+// far for tracing sessions created with Options.StreamTypeDescriptors. It is a
+// no-op for normal tracing sessions, which preserve TypeScript's deferred
+// types_N.json dump shape.
+func (tr *Tracing) FlushTypeDescriptors() error {
+	for _, tracer := range tr.tracers {
+		if err := tracer.FlushTypes(); err != nil {
+			return fmt.Errorf("failed to flush types for checker %d: %w", tracer.checkerIndex, err)
+		}
+	}
+	return nil
+}
+
 // StopTracing finalizes the tracing session and writes all output files
 func (tr *Tracing) StopTracing() error {
 	// Dump types from all tracers BEFORE acquiring the lock, because
@@ -466,6 +489,7 @@ func (tr *Tracing) StopTracing() error {
 			return fmt.Errorf("failed to dump types for checker %d: %w", tracer.checkerIndex, err)
 		}
 	}
+	tr.tracers = nil
 
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
@@ -510,7 +534,11 @@ type typeTracer struct {
 	checkerIndex       int
 	typesPath          string
 	includeTypeDisplay bool
+	streamDescriptors  bool
 	types              []TracedType
+	typeContent        strings.Builder
+	typeCount          int
+	typeFlushErr       error
 	mu                 sync.Mutex
 }
 
@@ -520,12 +548,69 @@ func (t *typeTracer) RecordType(typ TracedType) {
 	t.types = append(t.types, typ)
 }
 
+func (t *typeTracer) writeTypeDescriptor(descriptor TypeDescriptor, id uint32) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.typeFlushErr != nil {
+		return
+	}
+	if t.typeCount == 0 {
+		if err := t.fs.WriteFile(t.typesPath, "["); err != nil {
+			t.typeFlushErr = fmt.Errorf("failed to write types file header: %w", err)
+			return
+		}
+	} else {
+		t.typeContent.WriteString(",\n")
+	}
+
+	if err := json.MarshalWrite(&t.typeContent, descriptor); err != nil {
+		t.typeFlushErr = fmt.Errorf("failed to marshal type %d: %w", id, err)
+		return
+	}
+	t.typeCount++
+	if t.typeContent.Len() >= typeFlushThreshold {
+		if err := t.flushTypeContentLocked(); err != nil {
+			t.typeFlushErr = fmt.Errorf("failed to flush types file: %w", err)
+		}
+	}
+}
+
+func (t *typeTracer) FlushTypes() error {
+	if !t.streamDescriptors {
+		return nil
+	}
+
+	t.mu.Lock()
+	types := slices.Clone(t.types)
+	t.types = nil
+	t.mu.Unlock()
+
+	for i, typ := range types {
+		descriptor := t.buildTypeDescriptor(typ, nil)
+		t.writeTypeDescriptor(descriptor, typ.Id())
+		types[i] = nil
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.typeFlushErr
+}
+
 func (t *typeTracer) DumpTypes() error {
+	if t.streamDescriptors {
+		if err := t.FlushTypes(); err != nil {
+			return err
+		}
+		return t.finishStreamedTypes()
+	}
+
 	// Copy the types slice under lock, then release so Display() calls during
 	// buildTypeDescriptor don't deadlock when they create new types.
 	t.mu.Lock()
 	types := slices.Clone(t.types)
+	t.types = nil
 	t.mu.Unlock()
+	defer t.clearTypes()
 
 	if len(types) == 0 {
 		return nil
@@ -539,6 +624,14 @@ func (t *typeTracer) DumpTypes() error {
 
 	var sb strings.Builder
 	recursionIdentityMap := make(map[any]int)
+	recursionToken := func(identity any) int {
+		token, ok := recursionIdentityMap[identity]
+		if !ok {
+			token = len(recursionIdentityMap)
+			recursionIdentityMap[identity] = token
+		}
+		return token
+	}
 	flush := func() error {
 		if sb.Len() == 0 {
 			return nil
@@ -551,7 +644,7 @@ func (t *typeTracer) DumpTypes() error {
 	}
 
 	for i, typ := range types {
-		descriptor := t.buildTypeDescriptor(typ, recursionIdentityMap)
+		descriptor := t.buildTypeDescriptor(typ, recursionToken)
 
 		if err := json.MarshalWrite(&sb, descriptor); err != nil {
 			return fmt.Errorf("failed to marshal type %d: %w", typ.Id(), err)
@@ -573,6 +666,43 @@ func (t *typeTracer) DumpTypes() error {
 		return fmt.Errorf("failed to write types file: %w", err)
 	}
 	return nil
+}
+
+func (t *typeTracer) finishStreamedTypes() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.typeFlushErr != nil {
+		t.typeContent.Reset()
+		return t.typeFlushErr
+	}
+	if t.typeCount == 0 {
+		return nil
+	}
+
+	t.typeContent.WriteString("]\n")
+	if err := t.flushTypeContentLocked(); err != nil {
+		t.typeContent.Reset()
+		return fmt.Errorf("failed to write types file: %w", err)
+	}
+	return nil
+}
+
+func (t *typeTracer) flushTypeContentLocked() error {
+	if t.typeContent.Len() == 0 {
+		return nil
+	}
+	if err := t.fs.AppendFile(t.typesPath, t.typeContent.String()); err != nil {
+		return err
+	}
+	t.typeContent.Reset()
+	return nil
+}
+
+func (t *typeTracer) clearTypes() {
+	t.mu.Lock()
+	t.types = nil
+	t.mu.Unlock()
 }
 
 // TypeDescriptor represents a type in the output JSON
@@ -623,7 +753,7 @@ type LineAndChar struct {
 	Character int `json:"character"`
 }
 
-func (t *typeTracer) buildTypeDescriptor(typ TracedType, recursionIdentityMap map[any]int) TypeDescriptor {
+func (t *typeTracer) buildTypeDescriptor(typ TracedType, recursionToken func(any) int) TypeDescriptor {
 	symbol := typ.Symbol()
 	aliasSymbol := typ.AliasSymbol()
 
@@ -634,13 +764,11 @@ func (t *typeTracer) buildTypeDescriptor(typ TracedType, recursionIdentityMap ma
 
 	// Assign a unique integer token per recursion identity, matching TypeScript's behavior.
 	// This lets trace analysis tools detect which types share the same recursion identity.
-	if identity := typ.RecursionIdentity(); identity != nil {
-		token, ok := recursionIdentityMap[identity]
-		if !ok {
-			token = len(recursionIdentityMap)
-			recursionIdentityMap[identity] = token
+	if recursionToken != nil {
+		if identity := typ.RecursionIdentity(); identity != nil {
+			token := recursionToken(identity)
+			desc.RecursionID = &token
 		}
-		desc.RecursionID = &token
 	}
 
 	// Intrinsic name

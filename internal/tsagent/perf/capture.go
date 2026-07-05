@@ -27,6 +27,8 @@ import (
 // traceDir is the trace root path exposed through the trace sink.
 const traceDir = "/__tsagent_perf_trace__"
 
+const typeFlushGCInterval = 1024
+
 // Options controls what the traced compile measures.
 type Options struct {
 	// Emit runs the emit phase (including declaration emit) so its cost is
@@ -35,6 +37,9 @@ type Options struct {
 	// SingleThreaded forces a single checker, giving cleaner per-file timing
 	// attribution at the cost of wall-clock speed.
 	SingleThreaded bool
+	// IncludeLibs keeps all type-origin aggregations. Default captures only keep
+	// project-owned hot type groups, matching the default reports.
+	IncludeLibs bool
 }
 
 // Stats holds the project-level compiler counters and phase timings.
@@ -61,10 +66,7 @@ type Span struct {
 	Name    string
 	DurUS   float64 // microseconds
 	Path    string
-	Line    int
 	Pos     int
-	End     int
-	Kind    int
 	Sampled bool
 	Args    *traceArgs
 }
@@ -89,9 +91,10 @@ type Capture struct {
 	hotTypesAll     map[string]*hotTypeAgg
 	hotTypesProject map[string]*hotTypeAgg
 
-	ws       *core.Workspace
-	program  *compiler.Program
-	canonMap map[string]string // any path representation -> canonical FileName()
+	ws         *core.Workspace
+	program    *compiler.Program
+	canonMap   map[string]string // any path representation -> canonical FileName()
+	lineStarts map[string]tscore.ECMALineStarts
 }
 
 type typeOrigin struct {
@@ -113,7 +116,10 @@ func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, er
 		return nil, fmt.Errorf("create trace sink: %w", err)
 	}
 	defer traceFS.Cleanup()
-	tr, err := tracing.StartTracingWithOptions(traceFS, traceDir, ws.ConfigPath, false, tracing.Options{IncludeTypeDisplay: false})
+	tr, err := tracing.StartTracingWithOptions(traceFS, traceDir, ws.ConfigPath, false, tracing.Options{
+		IncludeTypeDisplay:    false,
+		StreamTypeDescriptors: true,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("start tracing: %w", err)
 	}
@@ -141,8 +147,14 @@ func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, er
 	bindDur := time.Since(bindStart)
 
 	checkStart := time.Now()
-	for _, f := range files {
+	for i, f := range files {
 		program.GetSemanticDiagnostics(ctx, f)
+		if err := tr.FlushTypeDescriptors(); err != nil {
+			return nil, fmt.Errorf("flush tracing types: %w", err)
+		}
+		if (i+1)%typeFlushGCInterval == 0 {
+			runtime.GC()
+		}
 	}
 	checkDur := time.Since(checkStart)
 
@@ -158,19 +170,24 @@ func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, er
 	if err := tr.StopTracing(); err != nil {
 		return nil, fmt.Errorf("stop tracing: %w", err)
 	}
+	tr = nil
 
 	var mem runtime.MemStats
 	runtime.GC()
 	runtime.GC()
 	runtime.ReadMemStats(&mem)
 
+	var hotTypesAll map[string]*hotTypeAgg
+	if opts.IncludeLibs {
+		hotTypesAll = map[string]*hotTypeAgg{}
+	}
 	c := &Capture{
 		ws:              ws,
 		program:         program,
 		typeCounts:      map[string]int{},
 		typeOriginIDs:   map[uint32]struct{}{},
 		typeOrigins:     map[uint32]typeOrigin{},
-		hotTypesAll:     map[string]*hotTypeAgg{},
+		hotTypesAll:     hotTypesAll,
 		hotTypesProject: map[string]*hotTypeAgg{},
 		Stats: Stats{
 			Files:          len(files),
@@ -189,13 +206,17 @@ func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, er
 		},
 	}
 	c.initCanonMap()
-	if err := c.parseTraceEvents(traceFS); err != nil {
-		return nil, err
-	}
 	c.program = nil
 	program = nil
 	files = nil
 	host = nil
+	programOpts.Host = nil
+	programOpts.Tracing = nil
+	runtime.GC()
+	runtime.GC()
+	if err := c.parseTraceEvents(traceFS); err != nil {
+		return nil, err
+	}
 	runtime.GC()
 	runtime.GC()
 	if err := c.parseTraceTypes(traceFS); err != nil {
@@ -346,7 +367,9 @@ func (c *Capture) recordTypeDescriptor(desc *tracing.TypeDescriptor) {
 	if name == "" {
 		return
 	}
-	c.recordHotType(c.hotTypesAll, name, desc, origin)
+	if c.hotTypesAll != nil {
+		c.recordHotType(c.hotTypesAll, name, desc, origin)
+	}
 	if origin != nil && c.inProject(origin.canon) {
 		c.recordHotType(c.hotTypesProject, name, desc, origin)
 	}
@@ -433,11 +456,6 @@ func (c *Capture) spanFrom(ev traceEnvelopeEvent, durUS float64, sampled bool) S
 	s := Span{Phase: ev.Cat, Name: ev.Name, DurUS: durUS, Sampled: sampled}
 	s.Path = ev.Args.Path
 	s.Pos = ev.Args.Pos
-	s.End = ev.Args.End
-	s.Kind = ev.Args.Kind
-	if sampled && s.Path != "" && s.Pos > 0 {
-		s.Line = c.lineOf(s.Path, s.Pos)
-	}
 	if sampled && s.Path == "" {
 		args := ev.Args
 		s.Args = &args

@@ -87,6 +87,16 @@ Changes implemented after the baseline:
   the full JSON file in a `strings.Builder` while the traced Program is still live.
 - `tsagent` perf capture disables unused type `display` text in `types_N.json`; normal
   `--generateTrace` output keeps display text by default.
+- `tsagent` perf capture streams type descriptors in chunks after checked files complete,
+  releasing the tracer's `TracedType` references instead of holding every recorded type
+  until `StopTracing`.
+- Perf capture runs a bounded GC cadence during large type-descriptor flush loops. The
+  measured default uses one forced GC per 1024 checked files, which keeps the large full
+  report below 7 GB with moderate wall-time cost.
+- Default project-scoped perf reports no longer build the all-libraries hot-type map
+  unless `--include-libs` is requested.
+- Perf releases the traced Program before parsing retained trace events; hot-check line
+  numbers are resolved lazily from workspace file text.
 
 Measured with the optimized binary (`/tmp/tsagent-opt`) on the same project:
 
@@ -157,6 +167,19 @@ counters dropped because the report no longer traces extra types created only wh
 formatting descriptor display strings. The perf report does not render `display`, so the
 remaining fields still cover summary, hot files, hot types, hot checks, and depth limits.
 
+Additional samples after chunked type-descriptor streaming and periodic GC in perf
+capture:
+
+| Probe | Prior optimized | Current | Change |
+| --- | ---: | ---: | --- |
+| `report full --top 1` wall | 42.96s | 52.99s | +23% |
+| `report full --top 1` RSS | 9.86 GB | 5.69 GB | -42% |
+| `report full --top 1` footprint | 9.87 GB | 5.71 GB | -42% |
+
+The 2048-file GC interval was also measured at `47.34s`, `6.73 GB` RSS, and `6.84 GB`
+footprint, but the committed 1024-file interval leaves more headroom under the 7 GB
+target.
+
 ## Small Iteration Fixture
 
 `testdata/tsagent/benchmark-example-typesystem` is a small TypeScript project intended
@@ -180,10 +203,12 @@ Validated quick probes:
 ### Perf report
 
 `internal/tsagent/perf.Gather` remains the largest individual report provider, but is now
-below the 12 GB target on the measured project. The current implementation releases
-compiler programs before type aggregation and no longer retains raw trace strings, full
-type descriptor slices, generic event argument maps, full type JSON builders, type display
-strings, or a declaration-origin entry for every recorded type. It still retains:
+below the 7 GB full-report target on the measured project. The current implementation
+releases compiler programs before type aggregation and no longer retains raw trace
+strings, full type descriptor slices, generic event argument maps, full type JSON
+builders, type display strings, all recorded `TracedType` references until `StopTracing`,
+the all-libraries hot-type map by default, or a declaration-origin entry for every
+recorded type. It still retains:
 
 - all normalized trace spans
 - all instant events
@@ -304,6 +329,8 @@ Reduce perf report transient memory:
 6. Write `types_N.json` files in bounded chunks instead of one full-file builder.
 7. Skip type descriptor display strings for `tsagent` perf capture because the report
    does not render them.
+8. Stream and release perf type descriptors throughout checking, then force bounded GC
+   during large capture loops to keep full-report footprint under the 7 GB target.
 
 Acceptance target:
 
@@ -313,9 +340,10 @@ Acceptance target:
   limits.
 
 Current result: `report perf --top 1` footprint is down from 43.44 GB to 8.99 GB on the
-target project, and `report full --top 1` is verified at 9.87 GB. This clears the 12 GB
-target and the requested additional 20-30% reduction, but remains above the older
-aspirational 8 GB single-threaded line.
+target project after the earlier display optimization, and `report full --top 1` is now
+verified at 5.71 GB after chunked type-descriptor streaming plus periodic GC. This clears
+the 12 GB target, the requested additional 20-30% reduction, and the follow-up 7 GB full
+report target.
 
 ### Phase 5: Full Report Guardrails
 

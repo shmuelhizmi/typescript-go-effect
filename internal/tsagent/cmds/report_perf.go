@@ -17,7 +17,7 @@ func init() {
 		Key:   "perf",
 		Group: "Performance",
 		Build: func(ctx context.Context, ws *core.Workspace, o reportOptions) ([]*report.Page, error) {
-			c, err := perf.Gather(ctx, ws, perf.Options{Emit: o.emit, SingleThreaded: o.singleThreaded || !o.parallelPerf})
+			c, err := perf.Gather(ctx, ws, perf.Options{Emit: o.emit, SingleThreaded: o.singleThreaded || !o.parallelPerf, IncludeLibs: o.includeLibs})
 			if err != nil {
 				return nil, err
 			}
