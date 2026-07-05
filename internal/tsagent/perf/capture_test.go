@@ -21,7 +21,7 @@ func TestRecordTypeDescriptorStoresOnlyNeededOrigins(t *testing.T) {
 		SymbolName: "Needed",
 		FirstDeclaration: &tracing.Location{
 			Path:  "/project/src/needed.ts",
-			Start: &tracing.LineAndChar{Line: 7},
+			Start: tracing.LineAndChar{Line: 7},
 		},
 	})
 	c.recordTypeDescriptor(&tracing.TypeDescriptor{
@@ -29,7 +29,7 @@ func TestRecordTypeDescriptorStoresOnlyNeededOrigins(t *testing.T) {
 		SymbolName: "Unneeded",
 		FirstDeclaration: &tracing.Location{
 			Path:  "/project/src/unneeded.ts",
-			Start: &tracing.LineAndChar{Line: 11},
+			Start: tracing.LineAndChar{Line: 11},
 		},
 	})
 

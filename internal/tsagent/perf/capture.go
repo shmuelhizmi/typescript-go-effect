@@ -27,8 +27,6 @@ import (
 // traceDir is the trace root path exposed through the trace sink.
 const traceDir = "/__tsagent_perf_trace__"
 
-const typeFlushGCInterval = 1024
-
 // Options controls what the traced compile measures.
 type Options struct {
 	// Emit runs the emit phase (including declaration emit) so its cost is
@@ -147,13 +145,10 @@ func Gather(ctx context.Context, ws *core.Workspace, opts Options) (*Capture, er
 	bindDur := time.Since(bindStart)
 
 	checkStart := time.Now()
-	for i, f := range files {
+	for _, f := range files {
 		program.GetSemanticDiagnostics(ctx, f)
 		if err := tr.FlushTypeDescriptors(); err != nil {
 			return nil, fmt.Errorf("flush tracing types: %w", err)
-		}
-		if (i+1)%typeFlushGCInterval == 0 {
-			runtime.GC()
 		}
 	}
 	checkDur := time.Since(checkStart)
@@ -350,7 +345,7 @@ func (c *Capture) recordTypeDescriptor(desc *tracing.TypeDescriptor) {
 	if desc.FirstDeclaration != nil {
 		canon := c.canonical(desc.FirstDeclaration.Path)
 		o := typeOrigin{canon: canon}
-		if desc.FirstDeclaration.Start != nil {
+		if desc.FirstDeclaration.Start.Line > 0 {
 			o.line = desc.FirstDeclaration.Start.Line
 		}
 		if _, needed := c.typeOriginIDs[desc.ID]; needed {

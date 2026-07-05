@@ -90,9 +90,10 @@ Changes implemented after the baseline:
 - `tsagent` perf capture streams type descriptors in chunks after checked files complete,
   releasing the tracer's `TracedType` references instead of holding every recorded type
   until `StopTracing`.
-- Perf capture runs a bounded GC cadence during large type-descriptor flush loops. The
-  measured default uses one forced GC per 1024 checked files, which keeps the large full
-  report below 7 GB with moderate wall-time cost.
+- Perf capture no longer uses the check-loop GC cadence that first brought `report full`
+  under 7 GB. The streamed type flush now takes ownership of its retained slice instead
+  of cloning it, and type descriptors use value fields for optional numeric IDs and
+  location line/character pairs to avoid per-descriptor pointer churn.
 - Default project-scoped perf reports no longer build the all-libraries hot-type map
   unless `--include-libs` is requested.
 - Perf releases the traced Program before parsing retained trace events; hot-check line
@@ -167,18 +168,18 @@ counters dropped because the report no longer traces extra types created only wh
 formatting descriptor display strings. The perf report does not render `display`, so the
 remaining fields still cover summary, hot files, hot types, hot checks, and depth limits.
 
-Additional samples after chunked type-descriptor streaming and periodic GC in perf
-capture:
+Additional samples after chunked type-descriptor streaming and lower-allocation
+descriptor construction, without the check-loop GC cadence:
 
 | Probe | Prior optimized | Current | Change |
 | --- | ---: | ---: | --- |
-| `report full --top 1` wall | 42.96s | 52.99s | +23% |
-| `report full --top 1` RSS | 9.86 GB | 5.69 GB | -42% |
-| `report full --top 1` footprint | 9.87 GB | 5.71 GB | -42% |
+| `report full --top 1` wall | 42.96s | 50.23s | +17% |
+| `report full --top 1` RSS | 9.86 GB | 6.82 GB | -31% |
+| `report full --top 1` footprint | 9.87 GB | 6.88 GB | -30% |
 
-The 2048-file GC interval was also measured at `47.34s`, `6.73 GB` RSS, and `6.84 GB`
-footprint, but the committed 1024-file interval leaves more headroom under the 7 GB
-target.
+The removed GC cadence measured lower (`5.71 GB` footprint at a 1024-file interval), but
+the committed allocation reductions keep the target below 7 GB without forcing GC during
+the check loop.
 
 ## Small Iteration Fixture
 
@@ -207,8 +208,8 @@ below the 7 GB full-report target on the measured project. The current implement
 releases compiler programs before type aggregation and no longer retains raw trace
 strings, full type descriptor slices, generic event argument maps, full type JSON
 builders, type display strings, all recorded `TracedType` references until `StopTracing`,
-the all-libraries hot-type map by default, or a declaration-origin entry for every
-recorded type. It still retains:
+the all-libraries hot-type map by default, per-descriptor numeric/location pointer churn,
+or a declaration-origin entry for every recorded type. It still retains:
 
 - all normalized trace spans
 - all instant events
@@ -233,9 +234,16 @@ I also tried detaching the type-tracer snapshot slice while dumping descriptors.
 slightly reduced RSS but worsened the report footprint sample (`14.18 GB` versus
 `13.97 GB` for chunked type writes alone), so that tweak was reverted.
 
-The old parallel perf capture remains available through `--parallel-perf`, but it was
-not a good default for this project. A post-change parallel probe was stopped after
-343.99s because runtime had already regressed badly.
+Removing every forced GC inside perf capture, including the phase-boundary collections
+after dropping the traced program, regressed the large full-report sample to `7.90 GB`
+footprint. Retrying trace-span aggregation after the descriptor allocation reductions
+also regressed (`8.53 GB` footprint). The committed change removes the check-loop GC
+cadence while keeping the phase-boundary cleanup that separates compiler lifetime from
+trace/report aggregation.
+
+The old parallel perf capture remains available through `--parallel-perf`, but it was not
+a good default for this project. A post-change parallel probe was stopped after 343.99s
+because runtime had already regressed badly.
 
 ### Quality complexity
 
@@ -329,8 +337,9 @@ Reduce perf report transient memory:
 6. Write `types_N.json` files in bounded chunks instead of one full-file builder.
 7. Skip type descriptor display strings for `tsagent` perf capture because the report
    does not render them.
-8. Stream and release perf type descriptors throughout checking, then force bounded GC
-   during large capture loops to keep full-report footprint under the 7 GB target.
+8. Stream and release perf type descriptors throughout checking, transfer flushed type
+   slices instead of cloning them, and avoid per-descriptor pointer churn to keep
+   full-report footprint under the 7 GB target without a check-loop GC cadence.
 
 Acceptance target:
 
@@ -341,9 +350,9 @@ Acceptance target:
 
 Current result: `report perf --top 1` footprint is down from 43.44 GB to 8.99 GB on the
 target project after the earlier display optimization, and `report full --top 1` is now
-verified at 5.71 GB after chunked type-descriptor streaming plus periodic GC. This clears
-the 12 GB target, the requested additional 20-30% reduction, and the follow-up 7 GB full
-report target.
+verified at 6.88 GB after chunked type-descriptor streaming and lower-allocation
+descriptor construction. This clears the 12 GB target, the requested additional 20-30%
+reduction, and the follow-up 7 GB full report target without a check-loop GC cadence.
 
 ### Phase 5: Full Report Guardrails
 

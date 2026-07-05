@@ -581,7 +581,7 @@ func (t *typeTracer) FlushTypes() error {
 	}
 
 	t.mu.Lock()
-	types := slices.Clone(t.types)
+	types := t.types
 	t.types = nil
 	t.mu.Unlock()
 
@@ -715,25 +715,25 @@ type TypeDescriptor struct {
 	UnionTypes              []uint32 `json:"unionTypes,omitzero"`
 	IntersectionTypes       []uint32 `json:"intersectionTypes,omitzero"`
 	AliasTypeArguments      []uint32 `json:"aliasTypeArguments,omitzero"`
-	KeyofType               *uint32  `json:"keyofType,omitzero"`
-	IndexedAccessObjectType *uint32  `json:"indexedAccessObjectType,omitzero"`
-	IndexedAccessIndexType  *uint32  `json:"indexedAccessIndexType,omitzero"`
-	ConditionalCheckType    *uint32  `json:"conditionalCheckType,omitzero"`
-	ConditionalExtendsType  *uint32  `json:"conditionalExtendsType,omitzero"`
-	// ConditionalTrueType and ConditionalFalseType are *int32 (not *uint32) because
+	KeyofType               uint32   `json:"keyofType,omitzero"`
+	IndexedAccessObjectType uint32   `json:"indexedAccessObjectType,omitzero"`
+	IndexedAccessIndexType  uint32   `json:"indexedAccessIndexType,omitzero"`
+	ConditionalCheckType    uint32   `json:"conditionalCheckType,omitzero"`
+	ConditionalExtendsType  uint32   `json:"conditionalExtendsType,omitzero"`
+	// ConditionalTrueType and ConditionalFalseType are int32 (not uint32) because
 	// unresolved conditional branches are serialized as -1, matching TypeScript's behavior.
-	ConditionalTrueType         *int32    `json:"conditionalTrueType,omitzero"`
-	ConditionalFalseType        *int32    `json:"conditionalFalseType,omitzero"`
-	SubstitutionBaseType        *uint32   `json:"substitutionBaseType,omitzero"`
-	ConstraintType              *uint32   `json:"constraintType,omitzero"`
-	InstantiatedType            *uint32   `json:"instantiatedType,omitzero"`
+	ConditionalTrueType         int32     `json:"conditionalTrueType,omitzero"`
+	ConditionalFalseType        int32     `json:"conditionalFalseType,omitzero"`
+	SubstitutionBaseType        uint32    `json:"substitutionBaseType,omitzero"`
+	ConstraintType              uint32    `json:"constraintType,omitzero"`
+	InstantiatedType            uint32    `json:"instantiatedType,omitzero"`
 	TypeArguments               []uint32  `json:"typeArguments,omitzero"`
 	ReferenceLocation           *Location `json:"referenceLocation,omitzero"`
-	ReverseMappedSourceType     *uint32   `json:"reverseMappedSourceType,omitzero"`
-	ReverseMappedMappedType     *uint32   `json:"reverseMappedMappedType,omitzero"`
-	ReverseMappedConstraintType *uint32   `json:"reverseMappedConstraintType,omitzero"`
-	EvolvingArrayElementType    *uint32   `json:"evolvingArrayElementType,omitzero"`
-	EvolvingArrayFinalType      *uint32   `json:"evolvingArrayFinalType,omitzero"`
+	ReverseMappedSourceType     uint32    `json:"reverseMappedSourceType,omitzero"`
+	ReverseMappedMappedType     uint32    `json:"reverseMappedMappedType,omitzero"`
+	ReverseMappedConstraintType uint32    `json:"reverseMappedConstraintType,omitzero"`
+	EvolvingArrayElementType    uint32    `json:"evolvingArrayElementType,omitzero"`
+	EvolvingArrayFinalType      uint32    `json:"evolvingArrayFinalType,omitzero"`
 	DestructuringPattern        *Location `json:"destructuringPattern,omitzero"`
 	FirstDeclaration            *Location `json:"firstDeclaration,omitzero"`
 	Flags                       []string  `json:"flags"`
@@ -742,9 +742,9 @@ type TypeDescriptor struct {
 
 // Location represents a source code location
 type Location struct {
-	Path  string       `json:"path"`
-	Start *LineAndChar `json:"start,omitzero"`
-	End   *LineAndChar `json:"end,omitzero"`
+	Path  string      `json:"path"`
+	Start LineAndChar `json:"start,omitzero"`
+	End   LineAndChar `json:"end,omitzero"`
 }
 
 // LineAndChar represents a line and character position (1-indexed)
@@ -805,48 +805,48 @@ func (t *typeTracer) buildTypeDescriptor(typ TracedType, recursionToken func(any
 
 	// Index type (keyof)
 	if indexType := typ.IndexType(); indexType != nil {
-		desc.KeyofType = new(indexType.Id())
+		desc.KeyofType = indexType.Id()
 	}
 
 	// Indexed access type
 	if objType := typ.IndexedAccessObjectType(); objType != nil {
-		desc.IndexedAccessObjectType = new(objType.Id())
+		desc.IndexedAccessObjectType = objType.Id()
 	}
 	if idxType := typ.IndexedAccessIndexType(); idxType != nil {
-		desc.IndexedAccessIndexType = new(idxType.Id())
+		desc.IndexedAccessIndexType = idxType.Id()
 	}
 
 	// Conditional type
 	if typ.IsConditional() {
 		if checkType := typ.ConditionalCheckType(); checkType != nil {
-			desc.ConditionalCheckType = new(checkType.Id())
+			desc.ConditionalCheckType = checkType.Id()
 		}
 		if extendsType := typ.ConditionalExtendsType(); extendsType != nil {
-			desc.ConditionalExtendsType = new(extendsType.Id())
+			desc.ConditionalExtendsType = extendsType.Id()
 		}
 		if trueType := typ.ConditionalTrueType(); trueType != nil {
-			desc.ConditionalTrueType = new(int32(trueType.Id()))
+			desc.ConditionalTrueType = int32(trueType.Id())
 		} else {
-			desc.ConditionalTrueType = new(int32(-1))
+			desc.ConditionalTrueType = -1
 		}
 		if falseType := typ.ConditionalFalseType(); falseType != nil {
-			desc.ConditionalFalseType = new(int32(falseType.Id()))
+			desc.ConditionalFalseType = int32(falseType.Id())
 		} else {
-			desc.ConditionalFalseType = new(int32(-1))
+			desc.ConditionalFalseType = -1
 		}
 	}
 
 	// Substitution type
 	if baseType := typ.SubstitutionBaseType(); baseType != nil {
-		desc.SubstitutionBaseType = new(baseType.Id())
+		desc.SubstitutionBaseType = baseType.Id()
 	}
 	if constraint := typ.SubstitutionConstraintType(); constraint != nil {
-		desc.ConstraintType = new(constraint.Id())
+		desc.ConstraintType = constraint.Id()
 	}
 
 	// Reference type
 	if target := typ.ReferenceTarget(); target != nil {
-		desc.InstantiatedType = new(target.Id())
+		desc.InstantiatedType = target.Id()
 	}
 	if args := typ.ReferenceTypeArguments(); len(args) > 0 {
 		desc.TypeArguments = mapTypeIds(args)
@@ -857,21 +857,21 @@ func (t *typeTracer) buildTypeDescriptor(typ TracedType, recursionToken func(any
 
 	// Reverse mapped type
 	if sourceType := typ.ReverseMappedSourceType(); sourceType != nil {
-		desc.ReverseMappedSourceType = new(sourceType.Id())
+		desc.ReverseMappedSourceType = sourceType.Id()
 	}
 	if mappedType := typ.ReverseMappedMappedType(); mappedType != nil {
-		desc.ReverseMappedMappedType = new(mappedType.Id())
+		desc.ReverseMappedMappedType = mappedType.Id()
 	}
 	if constraintType := typ.ReverseMappedConstraintType(); constraintType != nil {
-		desc.ReverseMappedConstraintType = new(constraintType.Id())
+		desc.ReverseMappedConstraintType = constraintType.Id()
 	}
 
 	// Evolving array type
 	if elemType := typ.EvolvingArrayElementType(); elemType != nil {
-		desc.EvolvingArrayElementType = new(elemType.Id())
+		desc.EvolvingArrayElementType = elemType.Id()
 	}
 	if finalType := typ.EvolvingArrayFinalType(); finalType != nil {
-		desc.EvolvingArrayFinalType = new(finalType.Id())
+		desc.EvolvingArrayFinalType = finalType.Id()
 	}
 
 	// Pattern (destructuring)
@@ -926,11 +926,11 @@ func getLocation(node *ast.Node) *Location {
 
 	return &Location{
 		Path: string(tspath.ToPath(file.FileName(), "", false)),
-		Start: &LineAndChar{
+		Start: LineAndChar{
 			Line:      startLine + 1,
 			Character: int(startChar) + 1,
 		},
-		End: &LineAndChar{
+		End: LineAndChar{
 			Line:      endLine + 1,
 			Character: int(endChar) + 1,
 		},
